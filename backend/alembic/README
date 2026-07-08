@@ -1,0 +1,8 @@
+Alembic migrations for the Bitrix24 Local App.
+
+Local development uses Base.metadata.create_all() on startup (see app/seed.py), so
+migrations are optional there. For production, generate and apply migrations:
+
+    cd backend
+    alembic revision --autogenerate -m "init"
+    alembic upgrade head

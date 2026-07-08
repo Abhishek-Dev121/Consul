@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Team · ClientHub</title>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet" />
+  <link href="/static/css/app.css" rel="stylesheet" />
+</head>
+<body>
+  <div id="toast" class="alert d-none"></div>
+  <div class="app-shell">
+    <aside class="sidebar" id="app-sidebar"></aside>
+    <div class="main">
+      <header class="topbar" id="app-topbar"></header>
+      <main class="content">
+        <!-- Role cards + permission matrix -->
+        <div id="roles-block"></div>
+        <!-- Summary strip -->
+        <div class="row g-3 mb-3" id="stats"></div>
+
+        <!-- Filter / search toolbar -->
+        <div class="filterbar">
+          <span class="muted small fw-bold me-1">Role</span>
+          <div class="seg" id="role-filter"></div>
+          <span class="muted small fw-bold ms-3 me-1">Status</span>
+          <select class="form-select form-select-sm" id="status-filter" style="width:auto">
+            <option value="">All</option><option value="active">Active</option>
+            <option value="disabled">Disabled</option><option value="pending">Pending</option>
+          </select>
+          <div class="ms-auto" style="min-width:240px">
+            <input class="form-control form-control-sm" id="search" placeholder="🔍 Search name or email…" />
+          </div>
+        </div>
+
+        <!-- Bulk action bar -->
+        <div class="bulkbar d-none" id="bulkbar">
+          <strong id="bulk-count">0 selected</strong>
+          <div class="ms-auto d-flex gap-2">
+            <button class="btn btn-sm btn-light" onclick="bulkAct('enable')">Enable</button>
+            <button class="btn btn-sm btn-light" onclick="bulkAct('disable')">Disable</button>
+            <select class="form-select form-select-sm" id="bulk-role" style="width:auto">
+              <option value="">Set role…</option><option value="employee">Employee</option>
+              <option value="team_lead">Team Lead</option><option value="admin">Admin</option>
+            </select>
+            <button class="btn btn-sm btn-danger" onclick="bulkAct('delete')">Delete</button>
+            <button class="btn btn-sm btn-outline-light" onclick="clearSelection()">Clear</button>
+          </div>
+        </div>
+
+        <!-- Table -->
+        <div class="card"><div class="card-body p-0">
+          <table class="table mb-0">
+            <thead><tr>
+              <th style="width:36px"><input type="checkbox" id="check-all" class="form-check-input" /></th>
+              <th class="sortable" data-sort="name">Name <span class="caret"></span></th>
+              <th class="sortable" data-sort="email">Email <span class="caret"></span></th>
+              <th class="sortable" data-sort="role">Role <span class="caret"></span></th>
+              <th>Status</th>
+              <th class="sortable" data-sort="created_at">Created <span class="caret"></span></th>
+              <th class="sortable" data-sort="last_login_at">Last login <span class="caret"></span></th>
+              <th></th>
+            </tr></thead>
+            <tbody id="rows"><tr><td colspan="8" class="muted p-3">Loading…</td></tr></tbody>
+          </table>
+        </div></div>
+
+        <!-- Pager -->
+        <div class="d-flex justify-content-between align-items-center mt-3">
+          <span class="muted small" id="pager-info"></span>
+          <div class="btn-group">
+            <button class="btn btn-sm btn-soft" id="prev-page">← Prev</button>
+            <button class="btn btn-sm btn-soft" id="next-page">Next →</button>
+          </div>
+        </div>
+      </main>
+    </div>
+  </div>
+
+  <!-- Create user modal -->
+  <div class="modal fade" id="userModal" tabindex="-1"><div class="modal-dialog"><div class="modal-content">
+    <div class="modal-header"><h5 class="modal-title">New team member</h5><button class="btn-close" data-bs-dismiss="modal"></button></div>
+    <div class="modal-body"><div class="row g-3">
+      <div class="col-6"><label class="form-label">Name *</label><input class="form-control" id="u-name" /></div>
+      <div class="col-6"><label class="form-label">Email *</label><input type="email" class="form-control" id="u-email" /></div>
+      <div class="col-12"><label class="form-label">Role</label>
+        <select class="form-select" id="u-role">
+          <option value="employee">Employee</option><option value="team_lead">Team Lead</option>
+          <option value="admin">Admin</option><option value="super_admin">Super Admin</option>
+        </select></div>
+      <div class="col-12">
+        <div class="form-check form-switch">
+          <input class="form-check-input" type="checkbox" id="u-invite" />
+          <label class="form-check-label" for="u-invite">Send an invite link (user sets their own password)</label>
+        </div>
+      </div>
+      <div class="col-12" id="u-password-wrap">
+        <label class="form-label">Password</label>
+        <div class="input-group">
+          <input type="password" class="form-control" id="u-password" />
+          <button class="btn btn-soft" type="button" id="u-toggle-pw">👁</button>
+          <button class="btn btn-soft" type="button" id="u-gen-pw">Generate</button>
+        </div>
+        <div class="pw-meter"><span></span></div>
+        <div class="muted small mt-1" id="u-pw-hint">Minimum 8 characters.</div>
+      </div>
+      <div class="col-12 d-none" id="u-invite-result">
+        <label class="form-label">Invite link</label>
+        <div class="invite-link-box" id="u-invite-link"></div>
+        <button class="btn btn-sm btn-soft mt-2" type="button" id="u-copy-invite">Copy link</button>
+        <span class="muted small ms-2" id="u-invite-emailed"></span>
+      </div>
+    </div></div>
+    <div class="modal-footer"><button class="btn btn-light" data-bs-dismiss="modal">Close</button>
+      <button class="btn btn-primary" id="save-user">Create</button></div>
+  </div></div></div>
+
+  <!-- Edit user modal -->
+  <div class="modal fade" id="editModal" tabindex="-1"><div class="modal-dialog"><div class="modal-content">
+    <div class="modal-header"><h5 class="modal-title">Edit user</h5><button class="btn-close" data-bs-dismiss="modal"></button></div>
+    <div class="modal-body"><div class="row g-3">
+      <div class="col-6"><label class="form-label">Name</label><input class="form-control" id="e-name" /></div>
+      <div class="col-6"><label class="form-label">Email</label><input type="email" class="form-control" id="e-email" /></div>
+      <div class="col-6"><label class="form-label">Role</label>
+        <select class="form-select" id="e-role">
+          <option value="employee">Employee</option><option value="team_lead">Team Lead</option>
+          <option value="admin">Admin</option><option value="super_admin">Super Admin</option>
+        </select></div>
+      <div class="col-6"><label class="form-label">Status</label>
+        <select class="form-select" id="e-status"><option value="true">Active</option><option value="false">Disabled</option></select></div>
+      <div class="col-12"><label class="form-label">Reset password <span class="muted small">(leave blank to keep)</span></label>
+        <div class="input-group"><input type="password" class="form-control" id="e-password" />
+          <button class="btn btn-soft" type="button" id="e-gen-pw">Generate</button></div></div>
+    </div></div>
+    <div class="modal-footer"><button class="btn btn-light" data-bs-dismiss="modal">Cancel</button>
+      <button class="btn btn-primary" id="save-edit">Save changes</button></div>
+  </div></div></div>
+
+  <!-- User detail drawer -->
+  <div class="offcanvas offcanvas-end" tabindex="-1" id="userDrawer" style="width:420px">
+    <div class="offcanvas-header"><h5 class="offcanvas-title">User details</h5>
+      <button class="btn-close" data-bs-dismiss="offcanvas"></button></div>
+    <div class="offcanvas-body" id="drawer-body"></div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+  <script src="/static/js/api.js"></script>
+  <script src="/static/js/components.js"></script>
+  <script src="/static/js/layout.js"></script>
+  <script src="/static/js/users.js"></script>
+</body>
+</html>
