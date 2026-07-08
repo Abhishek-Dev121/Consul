@@ -16,6 +16,7 @@ class ClientCreate(BaseModel):
     status: str = "active"
     assignee_ids: list[int] = []
     channel_ids: list[int] = []
+    bitrix_group_id: str | None = None
 
 
 class ClientUpdate(BaseModel):

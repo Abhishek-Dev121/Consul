@@ -24,31 +24,9 @@ def list_projects(
     if client_id:
         client = _client(db, client_id)
         ensure_client_access(user, client)
-        
-        # Fetch local projects
+
         stmt = select(Project).where(Project.client_id == client_id)
-        projects = db.execute(stmt).scalars().all()
-        
-        # Auto-match by client name if no projects are linked yet
-        if not projects:
-            try:
-                groups = bitrix_service.fetch_project_groups(db)
-                matched = False
-                for g in groups:
-                    name = g.get("NAME") or ""
-                    # Case-insensitive substring match
-                    if client.name.lower() in name.lower():
-                        bitrix_service.sync_project_group(db, client_id, g["ID"])
-                        matched = True
-                if matched:
-                    db.commit()
-                    # Re-fetch projects after linking
-                    projects = db.execute(stmt).scalars().all()
-            except Exception as e:
-                # Log and proceed without crashing
-                print(f"Auto-matching project groups failed: {e}")
-                
-        return projects
+        return db.execute(stmt).scalars().all()
 
     # Otherwise (global list), return all groups from Bitrix24
     stmt = select(Project).order_by(Project.created_at.desc())

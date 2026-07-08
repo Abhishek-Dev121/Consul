@@ -170,7 +170,6 @@
 
   // ---- Right summary panel ----
   async function renderSummary() {
-    const projects = await Api.get(`/api/projects?client_id=${clientId}`).catch(() => []);
     const ch = client.channels || [];
     document.getElementById("chat-summary").innerHTML = `
       <div class="summary-sec text-center">
@@ -186,11 +185,6 @@
         <div class="kv"><span class="k">Phone</span><span>${esc(client.phone || "—")}</span></div>
         <div class="kv"><span class="k">Channels</span><span>${ch.map((c) => esc(c.name)).join(", ") || "—"}</span></div>
         <div class="kv"><span class="k">Assignees</span><span>${(client.assignees || []).map((a) => esc(a.name)).join(", ") || "—"}</span></div>
-      </div>
-      <div class="summary-sec">
-        <h6>Projects (${projects.length})</h6>
-        ${projects.length ? projects.map((p) => `<div class="kv"><span>${esc(p.title)}</span>
-          <span class="chip">${esc(p.status || "—")}</span></div>`).join("") : '<div class="muted small">No linked projects.</div>'}
       </div>
       <div class="summary-sec">
         <h6>AI insight</h6>

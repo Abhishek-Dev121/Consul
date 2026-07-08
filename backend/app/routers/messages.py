@@ -9,6 +9,7 @@ from app.database import get_db
 from app.deps import get_current_user
 from app.models.audio import AudioRecording
 from app.models.client import Client
+from app.models.conversation import Conversation
 from app.models.file import FileRecord
 from app.models.message import Message
 from app.models.user import User
@@ -30,6 +31,23 @@ def _client(db: Session, client_id: int) -> Client:
     if not client:
         raise HTTPException(status_code=404, detail="Client not found")
     return client
+
+
+def _ensure_conversation(db: Session, client: Client, channel_id: int | None) -> Conversation:
+    """Live-typed messages aren't tied to a pasted chat log, but AI analysis is
+    keyed to a Conversation row. Reuse the client's existing one, or create a
+    lightweight placeholder so analysis has something to attach to."""
+    conv = db.execute(
+        select(Conversation)
+        .where(Conversation.client_id == client.id, Conversation.is_deleted.is_(False))
+        .order_by(Conversation.created_at.asc())
+    ).scalars().first()
+    if conv:
+        return conv
+    conv = Conversation(client_id=client.id, channel_id=channel_id, title="Live chat", raw_content="")
+    db.add(conv)
+    db.flush()
+    return conv
 
 
 @router.get("/{client_id}/messages", response_model=list[MessageOut])
@@ -124,8 +142,10 @@ def send_message(
     channel_id = payload.channel_id
     if channel_id is None and client.channels:
         channel_id = client.channels[0].id
+    conv = _ensure_conversation(db, client, channel_id)
     msg = Message(
         client_id=client.id,
+        conversation_id=conv.id,
         channel_id=channel_id,
         sender_name=actor.name,
         body=payload.body.strip(),
@@ -257,8 +277,9 @@ async def send_attachment(
         attach_type, attach_url = "file", f"/api/files/{rec.id}/download"
         log_activity(db, action="file.uploaded", actor_id=actor.id, client_id=client.id, detail={"filename": filename})
 
+    conv = _ensure_conversation(db, client, channel_id)
     msg = Message(
-        client_id=client.id, channel_id=channel_id, sender_name=actor.name,
+        client_id=client.id, conversation_id=conv.id, channel_id=channel_id, sender_name=actor.name,
         body="", is_client=False, sent_at=datetime.now(timezone.utc), created_by=actor.id,
         attachment_type=attach_type, attachment_url=attach_url, attachment_name=filename,
     )

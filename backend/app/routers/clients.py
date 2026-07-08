@@ -90,6 +90,16 @@ def create_client(
         (c_path / "audio").mkdir(parents=True, exist_ok=True)
         (c_path / "projects").mkdir(parents=True, exist_ok=True)
 
+    if payload.bitrix_group_id:
+        from app.services import bitrix_service
+        try:
+            bitrix_service.sync_project_group(db, client.id, payload.bitrix_group_id)
+            # Syncing pulls in real Bitrix project members as assignees; the client's
+            # assignee is fixed to its creator, so re-pin it after the sync.
+            client.assignees = [actor]
+        except Exception:
+            pass  # client is still created even if the project link fails
+
     log_activity(db, action="client.created", actor_id=actor.id, client_id=client.id,
                  detail={"name": client.name})
     db.commit()

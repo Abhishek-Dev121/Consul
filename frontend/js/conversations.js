@@ -5,13 +5,45 @@
   if (!writable) { const b = document.getElementById("new-conv-btn"); if (b) b.remove(); }
 
   const FILTERS = ["all", "whatsapp", "upwork", "slack", "email", "telegram"];
-  let clients = [], channels = [], active = null, chanFilter = "all", searchQ = "";
+  let clients = [], channels = [], active = null, chanFilter = "all", searchQ = "", view = "active";
   const preselect = parseInt(qs("client")) || null;
+  const canPurge = isAdmin();
 
   const platOf = (cl) => (cl.channels && cl.channels[0] && cl.channels[0].platform) || "other";
   const _ns = (s) => (!s ? "neu" : s.toLowerCase().includes("pos") ? "pos" : s.toLowerCase().includes("neg") ? "neg" : "neu");
 
   // ─── Left panel ───
+  function renderViewTabs() {
+    document.querySelectorAll("#cl-view-tabs .f-chip").forEach((el) => {
+      el.classList.toggle("active", el.dataset.view === view);
+      el.onclick = () => {
+        if (view === el.dataset.view) return;
+        view = el.dataset.view;
+        renderViewTabs();
+        closeThread();
+        load();
+      };
+    });
+  }
+
+  function closeThread() {
+    active = null;
+    document.getElementById("empty-center").style.display = "flex";
+    document.getElementById("thread-wrap").style.display = "none";
+    document.getElementById("ai-scroll").innerHTML = `<div class="ai2-empty">
+      <div class="ai-icon-wrap">&#10024;</div>
+      <h4>No analysis yet</h4>
+      <p>Select a client conversation to view or run AI analysis.</p>
+    </div>`;
+  }
+
+  async function load() {
+    try {
+      clients = await Api.get(`/api/overview/clients?archived=${view === "archived"}`);
+    } catch (e) { toast(e.message); clients = []; }
+    renderList();
+  }
+
   function renderFilter() {
     document.getElementById("cl-filter").innerHTML = FILTERS.map((f) =>
       `<button class="f-chip ${f === chanFilter ? "active" : ""}" data-f="${f}">${f === "all" ? "All" : platformName(f)}</button>`
@@ -26,12 +58,17 @@
       (chanFilter === "all" || cl.channels.some((ch) => ch.platform === chanFilter)) &&
       (!q || cl.name.toLowerCase().includes(q) || (cl.company || "").toLowerCase().includes(q))
     );
-    document.getElementById("cl-sub").textContent = `${clients.length} client${clients.length === 1 ? "" : "s"}`;
+    const noun = view === "archived" ? "archived client" : "client";
+    document.getElementById("cl-sub").textContent = `${clients.length} ${noun}${clients.length === 1 ? "" : "s"}`;
     const scroll = document.getElementById("cl-scroll");
     if (!list.length) {
-      scroll.innerHTML = `<div style="padding:24px 16px; text-align:center; color:var(--muted); font-size:13px;">No conversations found.</div>`;
+      scroll.innerHTML = `<div style="padding:24px 16px; text-align:center; color:var(--muted); font-size:13px;">
+        ${view === "archived" ? "No archived conversations." : "No conversations found."}</div>`;
       return;
     }
+    const showDelBtn = view === "archived" ? canPurge : writable;
+    const delTitle = view === "archived" ? "Delete permanently" : "Archive";
+    const delIcon = view === "archived" ? "&#x1F5D1;" : "&#x2715;";
     scroll.innerHTML = list.map((cl) => {
       const plat = platOf(cl);
       return `<div class="ci2 ${cl.id === active ? "on" : ""}" data-id="${cl.id}">
@@ -51,7 +88,7 @@
             </span>
           </div>
         </div>
-        ${writable ? `<button class="ci2-del" data-del="${cl.id}" title="Archive">&#x2715;</button>` : ""}
+        ${showDelBtn ? `<button class="ci2-del" data-del="${cl.id}" title="${delTitle}">${delIcon}</button>` : ""}
       </div>`;
     }).join("");
     document.querySelectorAll("#cl-scroll .ci2").forEach((el) =>
@@ -59,7 +96,12 @@
         if (!e.target.closest(".ci2-del")) selectClient(parseInt(el.dataset.id));
       }));
     document.querySelectorAll("#cl-scroll .ci2-del").forEach((b) =>
-      b.addEventListener("click", (e) => { e.stopPropagation(); archiveClient(parseInt(b.dataset.del)); }));
+      b.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const id = parseInt(b.dataset.del);
+        if (view === "archived") permanentlyDeleteClient(id);
+        else archiveClient(id);
+      }));
   }
 
   // ─── Center: message thread ───
@@ -89,56 +131,66 @@
         </a>
       </div>`;
 
-    // Composer
-    document.getElementById("composer-area").innerHTML = `
-      <div class="perm-banner ${writable ? "ok" : "no"}">
-        <svg class="perm-ic" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" viewBox="0 0 24 24">
-          ${writable ? '<path d="M5 13l4 4L19 7"/>' : '<rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>'}
-        </svg>
-        ${writable ? "You can reply to this conversation." : "Read-only role — replying is disabled."}
-      </div>
-      <div id="att-preview-area" class="att-preview" style="display:none"></div>
-      <div class="composer-toolbar">
-        <button class="toolbar-btn" id="att-btn" title="Attach file" ${writable ? "" : "disabled"}>
-          <svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66L9.41 16.41a2 2 0 0 1-2.83-2.83l8.49-8.49"/></svg>
-        </button>
-        <div class="toolbar-sep"></div>
-        <span style="font-size:11px;color:var(--muted-2);padding:0 4px">Type your reply below</span>
-      </div>
-      <div class="composer-input-row">
-        <textarea id="composer-text" placeholder="${writable ? "Type a reply..." : "Replying is disabled for your role"}" ${writable ? "" : "disabled"} rows="1"></textarea>
-        <button class="send-btn2" id="send-btn" ${writable ? "" : "disabled"}>
-          <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24" style="transform:rotate(45deg) translateX(1px)">
-            <line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/>
+    // Composer — archived conversations are read-only, no composer at all.
+    if (view === "archived") {
+      document.getElementById("composer-area").innerHTML = `
+        <div class="perm-banner no">
+          <svg class="perm-ic" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" viewBox="0 0 24 24">
+            <rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>
           </svg>
-        </button>
-      </div>`;
+          This conversation is archived — read-only. Delete it permanently from here if it's no longer needed.
+        </div>`;
+    } else {
+      document.getElementById("composer-area").innerHTML = `
+        <div class="perm-banner ${writable ? "ok" : "no"}">
+          <svg class="perm-ic" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" viewBox="0 0 24 24">
+            ${writable ? '<path d="M5 13l4 4L19 7"/>' : '<rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>'}
+          </svg>
+          ${writable ? "You can reply to this conversation." : "Read-only role — replying is disabled."}
+        </div>
+        <div id="att-preview-area" class="att-preview" style="display:none"></div>
+        <div class="composer-toolbar">
+          <button class="toolbar-btn" id="att-btn" title="Attach file" ${writable ? "" : "disabled"}>
+            <svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66L9.41 16.41a2 2 0 0 1-2.83-2.83l8.49-8.49"/></svg>
+          </button>
+          <div class="toolbar-sep"></div>
+          <span style="font-size:11px;color:var(--muted-2);padding:0 4px">Type your reply below</span>
+        </div>
+        <div class="composer-input-row">
+          <textarea id="composer-text" placeholder="${writable ? "Type a reply..." : "Replying is disabled for your role"}" ${writable ? "" : "disabled"} rows="1"></textarea>
+          <button class="send-btn2" id="send-btn" ${writable ? "" : "disabled"}>
+            <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24" style="transform:rotate(45deg) translateX(1px)">
+              <line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/>
+            </svg>
+          </button>
+        </div>`;
 
-    if (writable) {
-      const sendBtn = document.getElementById("send-btn");
-      const attBtn = document.getElementById("att-btn");
-      const attFileInput = document.getElementById("att-file-input");
-      const textarea = document.getElementById("composer-text");
+      if (writable) {
+        const sendBtn = document.getElementById("send-btn");
+        const attBtn = document.getElementById("att-btn");
+        const attFileInput = document.getElementById("att-file-input");
+        const textarea = document.getElementById("composer-text");
 
-      // Auto-resize textarea
-      textarea.addEventListener("input", () => {
-        textarea.style.height = "auto";
-        textarea.style.height = Math.min(textarea.scrollHeight, 130) + "px";
-      });
+        // Auto-resize textarea
+        textarea.addEventListener("input", () => {
+          textarea.style.height = "auto";
+          textarea.style.height = Math.min(textarea.scrollHeight, 130) + "px";
+        });
 
-      // Ctrl+Enter to send
-      textarea.addEventListener("keydown", (e) => {
-        if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); sendMessage(); }
-      });
+        // Ctrl+Enter to send
+        textarea.addEventListener("keydown", (e) => {
+          if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); sendMessage(); }
+        });
 
-      sendBtn.addEventListener("click", sendMessage);
-      attBtn.addEventListener("click", () => attFileInput.click());
-      attFileInput.addEventListener("change", () => {
-        const files = Array.from(attFileInput.files);
-        pendingAttachments.push(...files);
-        renderAttPreviews();
-        attFileInput.value = "";
-      });
+        sendBtn.addEventListener("click", sendMessage);
+        attBtn.addEventListener("click", () => attFileInput.click());
+        attFileInput.addEventListener("change", () => {
+          const files = Array.from(attFileInput.files);
+          pendingAttachments.push(...files);
+          renderAttPreviews();
+          attFileInput.value = "";
+        });
+      }
     }
 
     // Load messages
@@ -222,23 +274,15 @@
         ta.value = "";
         ta.style.height = "auto";
       }
-      // Then upload each attachment
+      // Then upload each attachment — this endpoint classifies by file type and
+      // routes video/audio to the audio folder, everything else to documents.
       for (const file of pendingAttachments) {
         const fd = new FormData();
         fd.append("upload", file);
-        fd.append("client_id", cl.id);
         try {
-          await Api.postForm("/api/audio", fd);
-        } catch (_) {
-          // fallback: if audio endpoint fails, try generic files endpoint
-          try {
-            const fd2 = new FormData();
-            fd2.append("upload", file);
-            fd2.append("client_id", cl.id);
-            await Api.postForm("/api/files", fd2);
-          } catch (e2) {
-            toast("Could not upload " + file.name + ": " + e2.message);
-          }
+          await Api.postForm(`/api/clients/${cl.id}/messages/upload`, fd);
+        } catch (e) {
+          toast("Could not upload " + file.name + ": " + e.message);
         }
       }
       pendingAttachments = [];
@@ -274,12 +318,12 @@
     scroll.innerHTML = `<div style="padding:20px 0;text-align:center;color:var(--muted);font-size:12.5px">Loading...</div>`;
 
     let convs = [];
-    try { convs = await Api.get(`/api/conversations?client_id=${cl.id}`); } catch (_) {}
+    try { convs = await Api.get(`/api/conversations?client_id=${cl.id}&is_deleted=${view === "archived"}`); } catch (_) {}
     if (!convs.length) {
       scroll.innerHTML = `<div class="ai2-empty">
         <div class="ai-icon-wrap">&#10024;</div>
         <h4>No analysis yet</h4>
-        <p>Upload a chat log via &ldquo;+ New conversation&rdquo; to generate a summary, key points and sentiment.</p>
+        <p>Send a message below, or upload a chat log via &ldquo;+ New conversation&rdquo;, to generate a summary, key points and sentiment.</p>
       </div>`;
       return;
     }
@@ -351,7 +395,7 @@
   async function archiveClient(id) {
     const cl = clients.find((c) => c.id === id);
     const ok = await confirmDialog(
-      `This soft-deletes ${cl ? cl.name : "this client"}'s chat logs (hidden from the list, not permanently erased).`,
+      `This moves ${cl ? cl.name : "this client"}'s chat to the Archive (hidden from the active list, not permanently erased).`,
       { title: "Archive this chat?", confirmText: "Archive" }
     );
     if (!ok) return;
@@ -359,18 +403,26 @@
       const convs = await Api.get(`/api/conversations?client_id=${id}`).catch(() => []);
       for (const cv of convs) await Api.del(`/api/conversations/${cv.id}`);
       clients = clients.filter((c) => c.id !== id);
-      if (active === id) {
-        active = null;
-        document.getElementById("empty-center").style.display = "flex";
-        document.getElementById("thread-wrap").style.display = "none";
-        document.getElementById("ai-scroll").innerHTML = `<div class="ai2-empty">
-          <div class="ai-icon-wrap">&#10024;</div>
-          <h4>No analysis yet</h4>
-          <p>Select a client conversation to view or run AI analysis.</p>
-        </div>`;
-      }
+      if (active === id) closeThread();
       renderList();
       toast("Chat archived", "success");
+    } catch (e) { toast(e.message); }
+  }
+
+  async function permanentlyDeleteClient(id) {
+    const cl = clients.find((c) => c.id === id);
+    const ok = await confirmDialog(
+      `This permanently erases ${cl ? cl.name : "this client"}'s archived chat — messages, attachments and analysis. This can't be undone.`,
+      { title: "Delete permanently?", confirmText: "Delete forever" }
+    );
+    if (!ok) return;
+    try {
+      const convs = await Api.get(`/api/conversations?client_id=${id}&is_deleted=true`).catch(() => []);
+      for (const cv of convs) await Api.del(`/api/conversations/${cv.id}/permanent`);
+      clients = clients.filter((c) => c.id !== id);
+      if (active === id) closeThread();
+      renderList();
+      toast("Conversation permanently deleted", "success");
     } catch (e) { toast(e.message); }
   }
 
@@ -446,13 +498,13 @@
   // ─── Init ───
   try {
     const [cls, chs] = await Promise.all([
-      Api.get("/api/overview/clients"),
+      Api.get("/api/overview/clients?archived=false"),
       Api.get("/api/channels").catch(() => []),
     ]);
     clients = cls; channels = chs;
     populateConvModal();
     document.getElementById("nc-save").addEventListener("click", saveNewConversation);
-    renderFilter(); renderList();
+    renderViewTabs(); renderFilter(); renderList();
     const first = (preselect && clients.find((c) => c.id === preselect)) ? preselect : (clients[0] && clients[0].id);
     if (first) selectClient(first);
   } catch (e) { toast(e.message); }

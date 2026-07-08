@@ -126,29 +126,46 @@
   document.getElementById("scrim").addEventListener("click", closeDrawer);
 
   // ---- create modal ----
+  let availableProjects = [], selectedProjectId = "";
+
+  function renderProjectList(filterText = "") {
+    const list = document.getElementById("c-project-list");
+    const f = filterText.trim().toLowerCase();
+    const filtered = f ? availableProjects.filter((p) => p.title.toLowerCase().includes(f)) : availableProjects;
+    list.innerHTML = filtered.length
+      ? filtered.map((p) => `<div class="dropdown-item" data-id="${esc(p.bitrix_project_id)}" style="cursor:pointer">${esc(p.title)}</div>`).join("")
+      : '<div class="muted small px-2 py-1">No matching projects.</div>';
+    list.querySelectorAll("[data-id]").forEach((el) => el.addEventListener("click", () => {
+      selectedProjectId = el.dataset.id;
+      const btn = document.getElementById("c-project-btn");
+      btn.textContent = el.textContent;
+      btn.classList.remove("text-muted");
+      document.getElementById("c-project-menu").classList.remove("show");
+    }));
+  }
+
   async function loadOptions() {
     try {
-      const [users, channels] = await Promise.all([
-        Api.get("/api/users").catch(() => ({ items: [] })),
+      const [channels, projects] = await Promise.all([
         Api.get("/api/channels").catch(() => []),
+        Api.get("/api/projects").catch(() => []),
       ]);
-      const ulist = users.items || users;
+      // Assignee is fixed to the currently logged-in user — not selectable.
+      document.getElementById("c-assignee-display").value = CURRENT_USER.name;
+
+      // Project: only Bitrix24 groups not yet linked to any client are "available"; required.
+      availableProjects = projects.filter((p) => p.client_id == null);
+      renderProjectList();
+      document.getElementById("c-project-search").addEventListener("input", (e) => renderProjectList(e.target.value));
+      const pBtn = document.getElementById("c-project-btn");
+      const pMenu = document.getElementById("c-project-menu");
+      pBtn.onclick = (e) => { e.stopPropagation(); pMenu.classList.toggle("show"); };
+      pMenu.onclick = (e) => e.stopPropagation();
+      document.addEventListener("click", () => pMenu.classList.remove("show"));
+
       // Channel: single-select dropdown (required).
       document.getElementById("c-channel").innerHTML = '<option value="">Select a channel…</option>' +
         channels.map((ch) => `<option value="${ch.id}">${esc(ch.name)} · ${platformName(ch.platform)}</option>`).join("");
-      // Assignees: matching checkbox dropdown, current user pre-checked + tagged "You".
-      const menu = document.getElementById("c-assignees-menu");
-      menu.innerHTML = ulist.length
-        ? ulist.map((u) => {
-            const me = u.id === CURRENT_USER.id;
-            return `<label class="dropdown-item d-flex align-items-center gap-2" style="cursor:pointer">
-              <input type="checkbox" class="form-check-input m-0" value="${u.id}" data-name="${esc(u.name)}" ${me ? "checked" : ""}>
-              <span>${esc(u.name)}</span><span class="muted small">· ${u.role.replace("_", " ")}</span>
-              ${me ? '<span class="me-tag ms-auto">You</span>' : ""}</label>`;
-          }).join("")
-        : '<div class="muted small px-2 py-1">No team members.</div>';
-      menu.querySelectorAll("input").forEach((cb) => cb.addEventListener("change", updateAssigneeLabel));
-      updateAssigneeLabel();
 
       // Inline Channel Creation Toggle
       const addChanBtn = document.getElementById("c-add-chan-btn");
@@ -192,45 +209,87 @@
         };
       }
 
-      // Reliable open/close (manual toggle — avoids Bootstrap dropdown quirks in modals).
-      const aBtn = document.getElementById("c-assignees-btn");
-      aBtn.onclick = (e) => { e.stopPropagation(); menu.classList.toggle("show"); };
-      menu.onclick = (e) => e.stopPropagation();  // keep open while ticking boxes
-      document.addEventListener("click", () => menu.classList.remove("show"));
     } catch (e) { /* optional */ }
   }
-  function updateAssigneeLabel() {
-    const sel = [...document.querySelectorAll("#c-assignees-menu input:checked")];
-    const btn = document.getElementById("c-assignees-btn");
-    btn.textContent = !sel.length ? "Select team members…"
-      : sel.length === 1 ? sel[0].dataset.name
-      : `${sel.length} assignees selected`;
-    btn.classList.toggle("text-muted", sel.length === 0);
-  }
-  const checkedAssignees = () => [...document.querySelectorAll("#c-assignees-menu input:checked")].map((i) => parseInt(i.value));
   const pickedChannels = () => {
     const v = document.getElementById("c-channel").value;
     return v ? [parseInt(v)] : [];
   };
 
-  document.getElementById("save-client").addEventListener("click", async () => {
+  // ---- Field-level validation display ----
+  const FIELD_INPUT_MAP = { name: "c-name", company: "c-company", email: "c-email", phone: "c-phone", notes: "c-notes" };
+
+  function clearFieldError(id) {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.classList.remove("is-invalid");
+    const fb = el.parentElement.querySelector(`.invalid-feedback[data-for="${id}"]`);
+    if (fb) fb.remove();
+  }
+  function clearAllFieldErrors() {
+    [...Object.values(FIELD_INPUT_MAP), "c-channel", "c-project-btn"].forEach(clearFieldError);
+  }
+  function showFieldError(id, message) {
+    const el = document.getElementById(id);
+    if (!el) return false;
+    el.classList.add("is-invalid");
+    let fb = el.parentElement.querySelector(`.invalid-feedback[data-for="${id}"]`);
+    if (!fb) {
+      fb = document.createElement("div");
+      fb.className = "invalid-feedback d-block";
+      fb.dataset.for = id;
+      el.insertAdjacentElement("afterend", fb);
+    }
+    fb.textContent = message;
+    return true;
+  }
+  // Clear a field's error as soon as the user starts fixing it.
+  [...Object.values(FIELD_INPUT_MAP), "c-channel"].forEach((id) => {
+    const el = document.getElementById(id);
+    if (el) el.addEventListener("input", () => clearFieldError(id));
+  });
+
+  const saveClientBtn = document.getElementById("save-client");
+  let creatingClient = false;
+  saveClientBtn.addEventListener("click", async () => {
+    if (creatingClient) return;  // guard against double/triple submits while the request is in flight
+    clearAllFieldErrors();
     const name = document.getElementById("c-name").value.trim();
     const channelIds = pickedChannels();
-    if (!name) return toast("Name is required");
-    if (!channelIds.length) return toast("Select a channel");
+    let hasError = false;
+    if (!name) { showFieldError("c-name", "Name is required"); hasError = true; }
+    if (!channelIds.length) { showFieldError("c-channel", "Select a channel"); hasError = true; }
+    if (!selectedProjectId) { showFieldError("c-project-btn", "Select a project"); hasError = true; }
+    if (hasError) return;
+    creatingClient = true;
+    saveClientBtn.disabled = true;
+    const originalLabel = saveClientBtn.textContent;
+    saveClientBtn.textContent = "Creating…";
     try {
       const created = await Api.post("/api/clients", {
         name, company: document.getElementById("c-company").value.trim() || null,
         email: document.getElementById("c-email").value.trim() || null,
         phone: document.getElementById("c-phone").value.trim() || null,
         notes: document.getElementById("c-notes").value.trim() || null,
-        assignee_ids: checkedAssignees(), channel_ids: channelIds,
+        assignee_ids: [CURRENT_USER.id], channel_ids: channelIds,
+        bitrix_group_id: selectedProjectId,
       });
       bootstrap.Modal.getOrCreateInstance(document.getElementById("clientModal")).hide();
       toast("Client created — opening conversation…", "success");
-      // Land straight in the conversation so there's no separate step to start chatting.
-      location.href = "/chat?id=" + created.id;
-    } catch (e) { toast(e.message); }
+      location.href = "/conversations?client=" + created.id;
+    } catch (e) {
+      let handled = false;
+      if (e.fieldErrors) {
+        for (const fe of e.fieldErrors) {
+          const inputId = FIELD_INPUT_MAP[fe.field];
+          if (inputId && showFieldError(inputId, fe.message)) handled = true;
+        }
+      }
+      if (!handled) toast(e.message);
+      creatingClient = false;
+      saveClientBtn.disabled = false;
+      saveClientBtn.textContent = originalLabel;
+    }
   });
 
   renderFilter();

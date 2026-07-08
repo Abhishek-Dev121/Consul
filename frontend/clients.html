@@ -62,10 +62,17 @@
         </div>
       </div>
       <div class="col-md-6">
-        <label class="form-label">Assignees <span class="muted small">— you're auto-added</span></label>
+        <label class="form-label">Assignee <span class="muted small">— set to your account</span></label>
+        <input class="form-control" id="c-assignee-display" disabled>
+      </div>
+      <div class="col-12">
+        <label class="form-label">Project <span class="req">*</span> <span class="muted small">— link an existing unassigned Bitrix24 project</span></label>
         <div class="dropdown w-100">
-          <button class="form-select text-start text-muted" type="button" id="c-assignees-btn">Select team members…</button>
-          <div class="dropdown-menu p-2 w-100" style="max-height:240px;overflow:auto" id="c-assignees-menu"></div>
+          <button class="form-select text-start text-muted" type="button" id="c-project-btn">Select a project…</button>
+          <div class="dropdown-menu p-2 w-100" id="c-project-menu">
+            <input type="text" class="form-control form-control-sm mb-2" id="c-project-search" placeholder="Search projects…" />
+            <div style="max-height:220px;overflow:auto" id="c-project-list"></div>
+          </div>
         </div>
       </div>
       <div class="col-12"><label class="form-label">Notes</label><textarea class="form-control" id="c-notes" rows="2"></textarea></div>

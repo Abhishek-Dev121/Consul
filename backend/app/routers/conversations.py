@@ -6,8 +6,8 @@ from app.database import get_db
 from app.deps import get_current_user
 from app.models.client import Client
 from app.models.conversation import Conversation, ConversationNote
-from app.models.user import User
-from app.rbac import ensure_can_write, ensure_client_access
+from app.models.user import User, UserRole
+from app.rbac import ensure_can_write, ensure_client_access, has_min_role
 from app.schemas.conversation import (
     ConversationCreate,
     ConversationOut,
@@ -31,10 +31,12 @@ def _load(db: Session, conv_id: int) -> Conversation:
 def list_conversations(
     client_id: int | None = None,
     q: str | None = None,
+    is_deleted: bool | None = None,
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    stmt = select(Conversation).where(Conversation.is_deleted.is_(False)).order_by(Conversation.created_at.desc())
+    stmt = select(Conversation).order_by(Conversation.created_at.desc())
+    stmt = stmt.where(Conversation.is_deleted.is_(False if is_deleted is None else is_deleted))
     if client_id:
         stmt = stmt.where(Conversation.client_id == client_id)
     if q:
@@ -119,6 +121,25 @@ def delete_conversation(
     conv.is_deleted = True  # soft delete — keep the record, just flag it
     log_activity(db, action="conversation.deleted", actor_id=actor.id, client_id=conv.client_id,
                  detail={"conversation_id": conv.id})
+    db.commit()
+
+
+@router.delete("/{conv_id}/permanent", status_code=204)
+def permanently_delete_conversation(
+    conv_id: int, db: Session = Depends(get_db), actor: User = Depends(get_current_user)
+):
+    """Hard-delete an archived conversation (and its messages, via cascade).
+    Only conversations already in the Archive (soft-deleted) can be purged this way."""
+    conv = _load(db, conv_id)
+    ensure_client_access(actor, db.get(Client, conv.client_id))
+    if not has_min_role(actor, UserRole.admin):
+        raise HTTPException(status_code=403, detail="Only admins can permanently delete conversations")
+    if not conv.is_deleted:
+        raise HTTPException(status_code=400, detail="Only archived conversations can be permanently deleted")
+    client_id = conv.client_id
+    db.delete(conv)
+    log_activity(db, action="conversation.purged", actor_id=actor.id, client_id=client_id,
+                 detail={"conversation_id": conv_id})
     db.commit()
 
 

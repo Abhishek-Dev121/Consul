@@ -172,7 +172,7 @@ def dashboard_overview(db: Session = Depends(get_db), user: User = Depends(get_c
 
 
 @router.get("/overview/clients")
-def clients_overview(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+def clients_overview(archived: bool = False, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     clients = _accessible_clients(db, user)
     cids = [c.id for c in clients] or [-1]
 
@@ -183,16 +183,34 @@ def clients_overview(db: Session = Depends(get_db), user: User = Depends(get_cur
         ).all()
         return {cid_: n for cid_, n in rows}
 
+    # A client is "archived" once it has conversations and none of them are active
+    # (i.e. every conversation was soft-deleted via the Archive action).
+    conv_state = db.execute(
+        select(Conversation.client_id, Conversation.is_deleted).where(Conversation.client_id.in_(cids))
+    ).all()
+    total_convs: dict[int, int] = {}
+    active_convs: dict[int, int] = {}
+    for cid_, deleted in conv_state:
+        total_convs[cid_] = total_convs.get(cid_, 0) + 1
+        if not deleted:
+            active_convs[cid_] = active_convs.get(cid_, 0) + 1
+
+    def _is_archived(cid_: int) -> bool:
+        return total_convs.get(cid_, 0) > 0 and active_convs.get(cid_, 0) == 0
+
+    clients = [c for c in clients if _is_archived(c.id) == archived]
+    cids = [c.id for c in clients] or [-1]
+
     chats = {cid_: n for cid_, n in db.execute(
         select(Conversation.client_id, func.count(Conversation.id))
-        .where(Conversation.client_id.in_(cids), Conversation.is_deleted.is_(False))
+        .where(Conversation.client_id.in_(cids), Conversation.is_deleted.is_(archived))
         .group_by(Conversation.client_id)).all()}
     calls = _counts(AudioRecording)
     projects = _counts(Project)
     docs = _counts(FileRecord)
 
     convos = db.execute(
-        select(Conversation.id, Conversation.client_id).where(Conversation.client_id.in_(cids), Conversation.is_deleted.is_(False))
+        select(Conversation.id, Conversation.client_id).where(Conversation.client_id.in_(cids), Conversation.is_deleted.is_(archived))
     ).all()
     conv_to_client = {cid_: clid for cid_, clid in convos}
     sent = _sentiment_by_client(db, conv_to_client)

@@ -37,7 +37,22 @@ const Api = {
     if (res.status === 204) return null;
     const data = await res.json().catch(() => ({}));
     if (!res.ok) {
-      throw new Error(data.detail ? JSON.stringify(data.detail) : `Request failed (${res.status})`);
+      let message = `Request failed (${res.status})`;
+      let fieldErrors = null;
+      if (Array.isArray(data.detail)) {
+        // FastAPI/Pydantic validation errors: [{loc: ["body", "email"], msg: "...", ...}]
+        fieldErrors = data.detail.map((d) => ({
+          field: Array.isArray(d.loc) ? d.loc[d.loc.length - 1] : null,
+          message: d.msg || "Invalid value",
+        }));
+        message = fieldErrors.map((f) => (f.field ? `${f.field}: ${f.message}` : f.message)).join("; ");
+      } else if (typeof data.detail === "string") {
+        message = data.detail;
+      }
+      const err = new Error(message);
+      err.fieldErrors = fieldErrors;
+      err.status = res.status;
+      throw err;
     }
     return data;
   },
