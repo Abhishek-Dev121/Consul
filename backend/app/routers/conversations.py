@@ -7,7 +7,7 @@ from app.deps import get_current_user
 from app.models.client import Client
 from app.models.conversation import Conversation, ConversationNote
 from app.models.user import User, UserRole
-from app.rbac import ensure_can_write, ensure_client_access, has_min_role
+from app.rbac import accessible_client_ids, ensure_can_write, ensure_client_access, has_min_role
 from app.schemas.conversation import (
     ConversationCreate,
     ConversationOut,
@@ -45,17 +45,11 @@ def list_conversations(
             Conversation.raw_content.ilike(like) | Conversation.title.ilike(like)
         )
     convos = db.execute(stmt).scalars().all()
-    # Filter by client access.
-    visible = []
-    for c in convos:
-        client = db.get(Client, c.client_id)
-        if client:
-            try:
-                ensure_client_access(user, client)
-                visible.append(c)
-            except HTTPException:
-                continue
-    return visible
+    # Filter by client access using a single pre-fetched id set (no per-row query).
+    allowed = accessible_client_ids(db, user)
+    if allowed is None:
+        return convos  # admin+: sees everything
+    return [c for c in convos if c.client_id in allowed]
 
 
 @router.get("/{conv_id}", response_model=ConversationOut)

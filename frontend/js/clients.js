@@ -44,7 +44,7 @@
 
     const grid = document.getElementById("grid");
     let html = paginated.length ? paginated.map(card).join("")
-      : '<div class="empty" style="grid-column:1/-1"><span class="em-ico">👥</span>No clients on this channel.</div>';
+      : `<div class="empty" style="grid-column:1/-1"><span class="em-ico">${Icon("users", { size: 24 })}</span>No clients on this channel.</div>`;
 
     if (list.length > pageSize) {
       html += `
@@ -58,7 +58,6 @@
     }
 
     grid.innerHTML = html;
-
     document.querySelectorAll(".client-card").forEach((el) =>
       el.addEventListener("click", () => openDrawer(parseInt(el.dataset.id))));
 
@@ -89,7 +88,7 @@
 
     dr.innerHTML = `
       <div class="dr-head">${avBox(c.name)}<div><h3>${esc(c.name)}</h3><div class="co">${esc(c.company || "—")}</div></div>
-        <button class="dr-close" id="drClose">✕</button></div>
+        <button class="dr-close" id="drClose">${Icon("x", { size: 16 })}</button></div>
       <div class="dr-body">
         <div class="dr-sec"><div style="display:flex;gap:8px;flex-wrap:wrap">
           ${c.channels.map((ch) => chanChip(ch.platform)).join("")}${sentPill(c.sentiment)}</div></div>
@@ -120,12 +119,12 @@
             : '<div class="log-item"><span class="ld"></span><div class="lt muted">No activity yet.</div></div>'}
         </div></div>
         <div class="d-flex gap-2 mt-2">
-          <a class="btn btn-primary flex-fill" href="/chat?id=${c.id}">💬 Conversations</a>
-          <a class="btn btn-soft flex-fill" href="/client?id=${c.id}">👤 View profile</a>
+          <a class="btn btn-primary flex-fill" href="/chat?id=${c.id}">${Icon("message", { size: 14 })} Conversations</a>
+          <a class="btn btn-soft flex-fill" href="/client?id=${c.id}">${Icon("users", { size: 14 })} View profile</a>
         </div>
         <div class="d-flex gap-2 mt-2">
-          ${canWrite() ? `<button class="btn btn-light flex-fill" id="dr-edit">✎ Edit client</button>` : ""}
-          ${isAdmin() ? `<button class="btn btn-outline-danger flex-fill" id="dr-delete">🗑 Delete</button>` : ""}
+          ${canWrite() ? `<button class="btn btn-light flex-fill" id="dr-edit">${Icon("edit", { size: 14 })} Edit client</button>` : ""}
+          ${isAdmin() ? `<button class="btn btn-outline-danger flex-fill" id="dr-delete">${Icon("trash", { size: 14 })} Delete</button>` : ""}
         </div>
       </div>`;
     dr.querySelector("#drClose").onclick = closeDrawer;

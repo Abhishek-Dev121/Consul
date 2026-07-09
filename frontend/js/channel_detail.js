@@ -31,17 +31,17 @@
         <div><div class="stat-val" style="font-size:1.1rem">${esc(channel.name)}</div>
           <div class="stat-label text-capitalize">${esc(channel.platform)} channel</div></div></div></div></div>
       <div class="col-md-4"><div class="card"><div class="stat">
-        <div class="stat-ico tint-blue">👥</div>
+        <div class="stat-ico tint-blue">${Icon("users", { size: 20 })}</div>
         <div><div class="stat-val">${clients.length}</div><div class="stat-label">Clients</div></div></div></div></div>
       <div class="col-md-4"><div class="card"><div class="stat">
-        <div class="stat-ico tint-violet">🧑‍💼</div>
+        <div class="stat-ico tint-violet">${Icon("users", { size: 20 })}</div>
         <div><div class="stat-val">${assignees.size}</div><div class="stat-label">Team members involved</div></div></div></div></div>`;
   }
 
   function render(list) {
     const rows = document.getElementById("rows");
     if (!list.length) {
-      rows.innerHTML = '<tr><td colspan="5"><div class="empty"><span class="em-ico">👥</span>No clients on this channel yet.</div></td></tr>';
+      rows.innerHTML = `<tr><td colspan="5"><div class="empty"><span class="em-ico">${Icon("users", { size: 24 })}</span>No clients on this channel yet.</div></td></tr>`;
       return;
     }
     rows.innerHTML = list.map((c) => `<tr>
@@ -50,7 +50,7 @@
       <td onclick="location.href='/conversations?client=${c.id}'">${esc(c.company || "—")}</td>
       <td class="muted" onclick="location.href='/conversations?client=${c.id}'">${esc(c.email || "—")}</td>
       <td class="small muted" onclick="location.href='/conversations?client=${c.id}'">${c.assignees.map((a) => esc(a.name)).join(", ") || "—"}</td>
-      <td class="text-end"><a class="btn btn-sm btn-primary" href="/conversations?client=${c.id}">💬 View conversations</a></td>
+      <td class="text-end"><a class="btn btn-sm btn-primary" href="/conversations?client=${c.id}">${Icon("message", { size: 14 })} View conversations</a></td>
     </tr>`).join("");
   }
 

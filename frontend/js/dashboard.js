@@ -1,6 +1,6 @@
 (async function () {
   const actions = `<a class="btn btn-light" href="/clients">+ New client</a>
-    <a class="btn btn-primary" href="/conversations">⬆ Upload conversation</a>`;
+    <a class="btn btn-primary" href="/conversations">${Icon("upload", { size: 14 })} Upload conversation</a>`;
   await renderLayout("/dashboard", "Dashboard", { crumb: "Overview of everything across clients", actions });
 
   function kpi(icon, label, val, sub, dir, href) {
@@ -21,14 +21,14 @@
     const maxVol = Math.max(1, ...d.channel_volume.map((v) => v.count));
 
     const view = `
-      <div class="page-head"><div><h2>${greeting()}, ${esc(CURRENT_USER.name)} 👋</h2>
+      <div class="page-head"><div><h2>${greeting()}, ${esc(CURRENT_USER.name)}</h2>
         <p>Here's what's happening across your clients.${k.at_risk ? ` <strong>${k.at_risk}</strong> account${k.at_risk === 1 ? "" : "s"} need attention.` : " Everything looks healthy."}</p></div></div>
 
       <div class="grid g-4" style="margin-bottom:16px">
-        ${kpi("👥", "Active clients", k.clients, "View clients", "", "/clients")}
-        ${kpi("💬", "Conversations", k.conversations, "View inbox", "", "/conversations")}
-        ${kpi("📞", "Calls analyzed", k.calls, "Call recordings", "", "/calls")}
-        ${kpi("⚑", "At-risk accounts", k.at_risk, k.at_risk ? "Needs attention" : "All healthy", k.at_risk ? "down" : "", "/conversations")}
+        ${kpi(Icon("users", { size: 18 }), "Active clients", k.clients, "View clients", "", "/clients")}
+        ${kpi(Icon("message", { size: 18 }), "Conversations", k.conversations, "View inbox", "", "/conversations")}
+        ${kpi(Icon("phone", { size: 18 }), "Calls analyzed", k.calls, "Call recordings", "", "/calls")}
+        ${kpi(Icon("ban", { size: 18 }), "At-risk accounts", k.at_risk, k.at_risk ? "Needs attention" : "All healthy", k.at_risk ? "down" : "", "/conversations")}
       </div>
 
       <div class="grid" style="grid-template-columns:1.6fr 1fr;align-items:start">
@@ -39,7 +39,7 @@
             <td><div class="t-name">${avBox(c.client)}<div><div class="nm">${esc(c.client)}</div><div class="sm">${esc(c.title)}</div></div></div></td>
             <td>${chanChip(c.platform)}</td><td>${sentPill(c.sentiment)}</td>
             <td class="small muted">${timeAgo(c.time)}</td></tr>`).join("")}
-          </tbody></table>` : '<div class="empty"><span class="em-ico">🎉</span>All caught up — no conversations need attention.</div>'}
+          </tbody></table>` : `<div class="empty"><span class="em-ico">${Icon("checkCircle", { size: 24 })}</span>All caught up — no conversations need attention.</div>`}
         </div>
 
         <div class="card card-pad">
@@ -83,7 +83,7 @@
             <td style="color:var(--muted)">${esc(p.client)}</td><td><span class="chip">${esc(p.status)}</span></td>
             <td><div style="display:flex;align-items:center;gap:8px"><div class="pbar"><div style="width:${p.progress}%"></div></div>
               <span class="mono" style="font-size:11px;color:var(--muted)">${p.progress}%</span></div></td></tr>`).join("")}
-          </tbody></table>` : '<div class="empty"><span class="em-ico">📁</span>No projects yet — sync from Bitrix24.</div>'}
+          </tbody></table>` : `<div class="empty"><span class="em-ico">${Icon("folder", { size: 24 })}</span>No projects yet — sync from Bitrix24.</div>`}
         </div>
       </div>`;
     document.getElementById("view").innerHTML = view;

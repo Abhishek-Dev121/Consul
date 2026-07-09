@@ -212,46 +212,57 @@ def clients_overview(archived: bool = False, db: Session = Depends(get_db), user
     cached = ttl_cache.get(cache_key)
     if cached is not None:
         return cached
+    from sqlalchemy import literal, union_all
     clients = _accessible_clients(db, user)
     cids = [c.id for c in clients] or [-1]
 
-    def _counts(model):
-        rows = db.execute(
-            select(model.client_id, func.count(model.id)).where(model.client_id.in_(cids))
-            .group_by(model.client_id)
-        ).all()
-        return {cid_: n for cid_, n in rows}
-
-    # A client is "archived" once it has conversations and none of them are active
-    # (i.e. every conversation was soft-deleted via the Archive action).
-    conv_state = db.execute(
-        select(Conversation.client_id, Conversation.is_deleted).where(Conversation.client_id.in_(cids))
+    # Single pass over all conversations for these clients: drives the archived
+    # determination, the per-client chat count, AND the sentiment lookup — instead
+    # of three separate round-trips.
+    conv_rows = db.execute(
+        select(Conversation.id, Conversation.client_id, Conversation.is_deleted)
+        .where(Conversation.client_id.in_(cids))
     ).all()
     total_convs: dict[int, int] = {}
     active_convs: dict[int, int] = {}
-    for cid_, deleted in conv_state:
-        total_convs[cid_] = total_convs.get(cid_, 0) + 1
+    for _cid, clid, deleted in conv_rows:
+        total_convs[clid] = total_convs.get(clid, 0) + 1
         if not deleted:
-            active_convs[cid_] = active_convs.get(cid_, 0) + 1
+            active_convs[clid] = active_convs.get(clid, 0) + 1
 
     def _is_archived(cid_: int) -> bool:
         return total_convs.get(cid_, 0) > 0 and active_convs.get(cid_, 0) == 0
 
     clients = [c for c in clients if _is_archived(c.id) == archived]
-    cids = [c.id for c in clients] or [-1]
+    cids = set(c.id for c in clients)
 
-    chats = {cid_: n for cid_, n in db.execute(
-        select(Conversation.client_id, func.count(Conversation.id))
-        .where(Conversation.client_id.in_(cids), Conversation.is_deleted.is_(archived))
-        .group_by(Conversation.client_id)).all()}
-    calls = _counts(AudioRecording)
-    projects = _counts(Project)
-    docs = _counts(FileRecord)
+    # Chats + conversation→client map for the visible (filtered) set, computed
+    # in Python from the rows we already fetched.
+    chats: dict[int, int] = {}
+    conv_to_client: dict[int, int] = {}
+    for conv_id, clid, deleted in conv_rows:
+        if clid in cids and bool(deleted) == archived:
+            chats[clid] = chats.get(clid, 0) + 1
+            conv_to_client[conv_id] = clid
 
-    convos = db.execute(
-        select(Conversation.id, Conversation.client_id).where(Conversation.client_id.in_(cids), Conversation.is_deleted.is_(archived))
-    ).all()
-    conv_to_client = {cid_: clid for cid_, clid in convos}
+    # calls + projects + docs counts in a single UNION round-trip.
+    id_list = list(cids) or [-1]
+    counts_q = union_all(
+        select(literal("calls").label("kind"), AudioRecording.client_id.label("cid"),
+               func.count(AudioRecording.id).label("n"))
+            .where(AudioRecording.client_id.in_(id_list)).group_by(AudioRecording.client_id),
+        select(literal("projects"), Project.client_id, func.count(Project.id))
+            .where(Project.client_id.in_(id_list)).group_by(Project.client_id),
+        select(literal("docs"), FileRecord.client_id, func.count(FileRecord.id))
+            .where(FileRecord.client_id.in_(id_list)).group_by(FileRecord.client_id),
+    )
+    calls: dict[int, int] = {}
+    projects: dict[int, int] = {}
+    docs: dict[int, int] = {}
+    bucket = {"calls": calls, "projects": projects, "docs": docs}
+    for kind, clid, n in db.execute(counts_q).all():
+        bucket[kind][clid] = n
+
     sent = _sentiment_by_client(db, conv_to_client)
 
     out = []

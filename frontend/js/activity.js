@@ -16,7 +16,7 @@
       return `<div class="log-item"><span class="ld" style="${a.actor_id ? "" : "background:#6366F1"}"></span>
         <div class="lt"><b>${esc(who)}</b> ${esc(humanizeActivity(a.action, a.detail))}${a.client_id ? ` · <b>${esc(clientNames[a.client_id] || "client")}</b>` : ""}</div>
         <div class="lm">${timeAgo(a.created_at)}</div></div>`;
-    }).join("") : '<div class="empty"><span class="em-ico">📜</span>No activity recorded yet.</div>';
+    }).join("") : `<div class="empty"><span class="em-ico">${Icon("scroll", { size: 26 })}</span>No activity recorded yet.</div>`;
 
     let pagerHtml = "";
     if (actsList.length > pageSize) {

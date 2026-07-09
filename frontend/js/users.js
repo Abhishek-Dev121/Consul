@@ -23,10 +23,10 @@
       <div class="stat-ico ${tint}">${icon}</div>
       <div><div class="stat-val">${val}</div><div class="stat-label">${label}</div></div></div></div></div>`;
     document.getElementById("stats").innerHTML =
-      card("Total", s.total, "👥", "tint-blue") +
-      card("Active", s.active, "✅", "tint-green") +
-      card("Pending invites", s.pending, "✉️", "tint-amber") +
-      card("Disabled", s.disabled, "🚫", "tint-sky");
+      card("Total", s.total, Icon("users", { size: 20 }), "tint-blue") +
+      card("Active", s.active, Icon("check", { size: 20 }), "tint-green") +
+      card("Pending invites", s.pending, Icon("mail", { size: 20 }), "tint-amber") +
+      card("Disabled", s.disabled, Icon("ban", { size: 20 }), "tint-sky");
   }
 
   // ================= Filters =================
@@ -73,13 +73,13 @@
   function rowActions(u) {
     if (!admin) return "";
     const isSelf = u.id === CURRENT_USER.id;
-    const items = [`<li><a class="dropdown-item" href="#" onclick="openEdit(${u.id});return false">✎ Edit</a></li>`];
+    const items = [`<li><a class="dropdown-item" href="#" onclick="openEdit(${u.id});return false">${Icon("edit", { size: 14 })} Edit</a></li>`];
     if (u.is_pending)
-      items.push(`<li><a class="dropdown-item" href="#" onclick="resendInvite(${u.id});return false">✉️ Resend invite</a></li>`);
+      items.push(`<li><a class="dropdown-item" href="#" onclick="resendInvite(${u.id});return false">${Icon("mail", { size: 14 })} Resend invite</a></li>`);
     if (!isSelf) {
-      items.push(`<li><a class="dropdown-item" href="#" onclick="toggleActive(${u.id},${!u.is_active});return false">${u.is_active ? "🚫 Disable" : "✅ Enable"}</a></li>`);
+      items.push(`<li><a class="dropdown-item" href="#" onclick="toggleActive(${u.id},${!u.is_active});return false">${u.is_active ? `${Icon("ban", { size: 14 })} Disable` : `${Icon("check", { size: 14 })} Enable`}</a></li>`);
       items.push(`<li><hr class="dropdown-divider"></li>`);
-      items.push(`<li><a class="dropdown-item text-danger" href="#" onclick="delUser(${u.id});return false">🗑 Delete</a></li>`);
+      items.push(`<li><a class="dropdown-item text-danger" href="#" onclick="delUser(${u.id});return false">${Icon("trash", { size: 14 })} Delete</a></li>`);
     }
     return `<div class="dropdown"><button class="btn btn-sm btn-soft" data-bs-toggle="dropdown">⋯</button>
       <ul class="dropdown-menu dropdown-menu-end">${items.join("")}</ul></div>`;
@@ -88,7 +88,7 @@
   function render(users) {
     const rows = document.getElementById("rows");
     if (!users.length) {
-      rows.innerHTML = '<tr><td colspan="8"><div class="empty"><span class="em-ico">🧑‍💼</span>No users match these filters.</div></td></tr>';
+      rows.innerHTML = `<tr><td colspan="8"><div class="empty"><span class="em-ico">${Icon("users", { size: 26 })}</span>No users match these filters.</div></td></tr>`;
       return;
     }
     rows.innerHTML = users.map((u) => {
@@ -220,7 +220,7 @@
     if (!r.invite_url) { wrap.classList.add("d-none"); return; }
     wrap.classList.remove("d-none");
     document.getElementById("u-invite-link").textContent = r.invite_url;
-    document.getElementById("u-invite-emailed").textContent = r.invite_emailed ? "✓ emailed" : "(email not configured — share manually)";
+    document.getElementById("u-invite-emailed").innerHTML = r.invite_emailed ? `${Icon("check", { size: 13 })} emailed` : "(email not configured — share manually)";
   }
   document.getElementById("u-copy-invite").addEventListener("click", () => {
     navigator.clipboard.writeText(document.getElementById("u-invite-link").textContent);
@@ -324,7 +324,7 @@
     const cards = Object.entries(ROLE_DESC).map(([k, r]) => `
       <div class="card card-pad" style="${k === me ? "border-color:var(--brand);box-shadow:0 0 0 3px var(--brand-soft)" : ""}">
         <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
-          <span style="width:30px;height:30px;border-radius:8px;background:var(--brand-soft);color:var(--brand);display:grid;place-items:center">🛡️</span>
+          <span style="width:30px;height:30px;border-radius:8px;background:var(--brand-soft);color:var(--brand);display:grid;place-items:center">${Icon("shield", { size: 16 })}</span>
           <div style="font-family:var(--display);font-weight:600;font-size:14px">${r.label}</div></div>
         <p style="font-size:11.5px;color:var(--muted);line-height:1.5">${r.desc}</p>
         ${k === me ? '<div style="margin-top:9px"><span class="spill s-pos"><span class="pdot"></span>Your role</span></div>' : ""}
@@ -338,7 +338,7 @@
       ["Manage users & roles", 1, 1, 0, 0], ["Create Super Admins", 1, 0, 0, 0],
       ["System settings", 1, 0, 0, 0],
     ];
-    const yn = (v) => v ? '<span class="yes">✓</span>' : '<span class="no">✕</span>';
+    const yn = (v) => v ? `<span class="yes">${Icon("check", { size: 13 })}</span>` : `<span class="no">${Icon("x", { size: 13 })}</span>`;
     const matrix = `<div class="card" style="margin:16px 0"><div class="card-h"><h3>Permission matrix</h3></div>
       <table class="table matrix"><thead><tr><th>Capability</th><th>Super Admin</th><th>Admin</th><th>Team Lead</th><th>Employee</th></tr></thead>
       <tbody>${caps.map((c) => `<tr><td>${c[0]}</td><td>${yn(c[1])}</td><td>${yn(c[2])}</td><td>${yn(c[3])}</td><td>${yn(c[4])}</td></tr>`).join("")}</tbody></table></div>`;

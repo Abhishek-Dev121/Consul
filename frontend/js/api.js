@@ -40,6 +40,32 @@ const _apiCache = {
   },
 };
 
+// Global top-of-page progress bar: gives instant visual feedback on every API
+// call so the app feels responsive even while a request is in flight. A short
+// show-delay avoids flashing it for near-instant requests.
+const _progress = { count: 0, showTimer: null, el: null };
+function _progressEl() {
+  if (_progress.el) return _progress.el;
+  const el = document.createElement("div");
+  el.id = "api-progress";
+  document.body.appendChild(el);
+  return (_progress.el = el);
+}
+function _progressStart() {
+  _progress.count++;
+  if (_progress.count === 1) {
+    clearTimeout(_progress.showTimer);
+    _progress.showTimer = setTimeout(() => _progressEl().classList.add("show"), 120);
+  }
+}
+function _progressEnd() {
+  _progress.count = Math.max(0, _progress.count - 1);
+  if (_progress.count === 0) {
+    clearTimeout(_progress.showTimer);
+    if (_progress.el) _progress.el.classList.remove("show");
+  }
+}
+
 const Api = {
   // Token lives in localStorage when "remember me" is on (survives restart),
   // otherwise in sessionStorage (cleared when the tab/browser closes).
@@ -51,43 +77,48 @@ const Api = {
   clearToken() { localStorage.removeItem(TOKEN_KEY); sessionStorage.removeItem(TOKEN_KEY); },
 
   async request(method, path, body, isForm = false) {
-    const headers = {};
-    const token = this.token();
-    if (token) headers["Authorization"] = `Bearer ${token}`;
-    let payload = body;
-    if (body && !isForm) {
-      headers["Content-Type"] = "application/json";
-      payload = JSON.stringify(body);
-    }
-    const targetPath = path.startsWith("http") ? path : (BASE_URL + path);
-    const res = await fetch(targetPath, { method, headers, body: payload });
-    if (res.status === 401) {
-      Api.clearToken();
-      _apiCache.clear();
-      if (!location.pathname.endsWith("/login")) location.href = "/login";
-      throw new Error("Unauthorized");
-    }
-    if (res.status === 204) return null;
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) {
-      let message = `Request failed (${res.status})`;
-      let fieldErrors = null;
-      if (Array.isArray(data.detail)) {
-        // FastAPI/Pydantic validation errors: [{loc: ["body", "email"], msg: "...", ...}]
-        fieldErrors = data.detail.map((d) => ({
-          field: Array.isArray(d.loc) ? d.loc[d.loc.length - 1] : null,
-          message: d.msg || "Invalid value",
-        }));
-        message = fieldErrors.map((f) => (f.field ? `${f.field}: ${f.message}` : f.message)).join("; ");
-      } else if (typeof data.detail === "string") {
-        message = data.detail;
+    _progressStart();
+    try {
+      const headers = {};
+      const token = this.token();
+      if (token) headers["Authorization"] = `Bearer ${token}`;
+      let payload = body;
+      if (body && !isForm) {
+        headers["Content-Type"] = "application/json";
+        payload = JSON.stringify(body);
       }
-      const err = new Error(message);
-      err.fieldErrors = fieldErrors;
-      err.status = res.status;
-      throw err;
+      const targetPath = path.startsWith("http") ? path : (BASE_URL + path);
+      const res = await fetch(targetPath, { method, headers, body: payload });
+      if (res.status === 401) {
+        Api.clearToken();
+        _apiCache.clear();
+        if (!location.pathname.endsWith("/login")) location.href = "/login";
+        throw new Error("Unauthorized");
+      }
+      if (res.status === 204) return null;
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        let message = `Request failed (${res.status})`;
+        let fieldErrors = null;
+        if (Array.isArray(data.detail)) {
+          // FastAPI/Pydantic validation errors: [{loc: ["body", "email"], msg: "...", ...}]
+          fieldErrors = data.detail.map((d) => ({
+            field: Array.isArray(d.loc) ? d.loc[d.loc.length - 1] : null,
+            message: d.msg || "Invalid value",
+          }));
+          message = fieldErrors.map((f) => (f.field ? `${f.field}: ${f.message}` : f.message)).join("; ");
+        } else if (typeof data.detail === "string") {
+          message = data.detail;
+        }
+        const err = new Error(message);
+        err.fieldErrors = fieldErrors;
+        err.status = res.status;
+        throw err;
+      }
+      return data;
+    } finally {
+      _progressEnd();
     }
-    return data;
   },
 
   // Stale-while-revalidate GET: returns cached data immediately if available,
@@ -115,19 +146,24 @@ const Api = {
   },
 
   async login(email, password, remember = true) {
-    const form = new URLSearchParams();
-    form.set("username", email);
-    form.set("password", password);
-    const res = await fetch(BASE_URL + "/api/auth/login", {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: form.toString(),
-    });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(data.detail || "Login failed");
-    _apiCache.clear();
-    this.setToken(data.access_token, remember);
-    return data;
+    _progressStart();
+    try {
+      const form = new URLSearchParams();
+      form.set("username", email);
+      form.set("password", password);
+      const res = await fetch(BASE_URL + "/api/auth/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: form.toString(),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.detail || "Login failed");
+      _apiCache.clear();
+      this.setToken(data.access_token, remember);
+      return data;
+    } finally {
+      _progressEnd();
+    }
   },
 };
 

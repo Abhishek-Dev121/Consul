@@ -4,27 +4,43 @@ const ROLE_RANK = { employee: 1, team_lead: 2, admin: 3, super_admin: 4 };
 
 const NAV = [
   { section: "Workspace", items: [
-    { href: "/dashboard", label: "Dashboard", icon: "🏠", min: "employee" },
-    { href: "/clients", label: "Clients", icon: "👥", min: "employee" },
-    { href: "/conversations", label: "Conversations", icon: "💬", min: "employee" },
-    { href: "/projects", label: "Projects", icon: "📁", min: "employee" },
+    { href: "/dashboard", label: "Dashboard", icon: "home", min: "employee" },
+    { href: "/clients", label: "Clients", icon: "users", min: "employee" },
+    { href: "/conversations", label: "Conversations", icon: "message", min: "employee" },
+    { href: "/projects", label: "Projects", icon: "folder", min: "employee" },
   ]},
   { section: "Records", items: [
-    { href: "/calls", label: "Call Recordings", icon: "📞", min: "employee" },
-    { href: "/documents", label: "Documents", icon: "📄", min: "employee" },
+    { href: "/calls", label: "Call Recordings", icon: "phone", min: "employee" },
+    { href: "/documents", label: "Documents", icon: "file", min: "employee" },
   ]},
   { section: "Intelligence", items: [
-    { href: "/reports", label: "Reports & Analytics", icon: "📊", min: "team_lead" },
+    { href: "/reports", label: "Reports & Analytics", icon: "chart", min: "team_lead" },
   ]},
   { section: "Administration", items: [
-    { href: "/channels", label: "Channels", icon: "📡", min: "team_lead" },
-    { href: "/users", label: "Users & Roles", icon: "🛡️", min: "team_lead" },
-    { href: "/activity", label: "Activity Log", icon: "📜", min: "team_lead" },
-    { href: "/bitrix", label: "Bitrix24", icon: "🔗", min: "admin" },
+    { href: "/channels", label: "Channels", icon: "rss", min: "team_lead" },
+    { href: "/users", label: "Users & Roles", icon: "shield", min: "team_lead" },
+    { href: "/activity", label: "Activity Log", icon: "scroll", min: "team_lead" },
+    { href: "/bitrix", label: "Bitrix24", icon: "link", min: "admin" },
   ]},
 ];
 
 let CURRENT_USER = null;
+
+// Collapse/expand the desktop sidebar. Sets the inline flex-basis/width directly
+// (in addition to toggling the class used for the rest of the collapsed styling).
+// max-width/min-width are set explicitly too: some descendant's min-content size
+// otherwise creates an implicit floor that keeps the flex item from actually
+// shrinking below it even with flex-shrink/flex-basis set.
+function setNavCollapsed(shell, collapsed) {
+  shell.classList.toggle("nav-collapsed", collapsed);
+  const sidebar = document.querySelector(".sidebar");
+  if (sidebar) {
+    sidebar.style.flex = collapsed ? "0 0 74px" : "";
+    sidebar.style.width = collapsed ? "74px" : "";
+    sidebar.style.maxWidth = collapsed ? "74px" : "";
+    sidebar.style.minWidth = collapsed ? "0" : "";
+  }
+}
 
 function ensureFonts() {
   if (document.getElementById("ch-fonts")) return;
@@ -71,14 +87,14 @@ function cacheUser(user, remember = true) {
 function doRenderLayout(active, pageTitle, user, opts) {
   // Restore collapsed-sidebar preference (desktop).
   const shell = document.querySelector(".app-shell");
-  if (shell && localStorage.getItem("ch_nav") === "collapsed") shell.classList.add("nav-collapsed");
+  if (shell && localStorage.getItem("ch_nav") === "collapsed") setNavCollapsed(shell, true);
 
   // ---- Sidebar ----
   const sections = NAV.map((sec) => {
     const links = sec.items
       .filter((n) => user && ROLE_RANK[user.role] >= ROLE_RANK[n.min])
       .map((n) => `<a class="nav-link ${n.href === active ? "active" : ""}" href="${n.href}" title="${n.label}">
-        <span class="ico">${n.icon}</span><span>${n.label}</span></a>`).join("");
+        <span class="ico">${Icon(n.icon, { size: 17 })}</span><span>${n.label}</span></a>`).join("");
     if (!links) return "";
     return `<div class="nav-section">${sec.section}</div>${links}`;
   }).join("");
@@ -87,19 +103,30 @@ function doRenderLayout(active, pageTitle, user, opts) {
   if (sidebarEl) {
     sidebarEl.innerHTML = `
       <div class="brand">
-        <div class="logo">📨</div>
+        <div class="logo">${Icon("message", { size: 20, inline: false })}</div>
         <div><h1>ClientHub</h1><div class="tag">Bitrix24 Local App</div></div>
       </div>
       <nav class="nav">${sections}</nav>
       <div class="rail-foot">
-        <div class="role-card">
-          <div class="rc-top"><label>Signed in</label>
-            <button class="signout" style="width:auto;margin:0;padding:3px 8px;font-size:11px" onclick="openAccount()">My account</button></div>
-          <div class="me">
-            <span class="av">${initials(user ? user.name : "")}</span>
-            <div><div class="nm">${esc(user ? user.name : "")}</div><div class="rl">${user ? user.role.replace("_", " ") : ""}</div></div>
+        <div class="dropdown dropup profile-dd">
+          <button class="profile-trigger" data-bs-toggle="dropdown" aria-expanded="false">
+            <span class="av">${initials(user.name)}</span>
+            <span class="role-txt">${user.role.replace("_", " ")}</span>
+            <span class="chev">${Icon("chevronDown", { size: 14 })}</span>
+          </button>
+          <div class="dropdown-menu profile-menu">
+            <div class="profile-menu-head">
+              <span class="av">${initials(user.name)}</span>
+              <div class="pm-info">
+                <div class="nm">${esc(user.name)}</div>
+                <div class="em">${esc(user.email)}</div>
+                <span class="chip info mt-1" style="text-transform:capitalize">${user.role.replace("_", " ")}</span>
+              </div>
+            </div>
+            <div class="dropdown-divider"></div>
+            <button class="dropdown-item" onclick="openAccount()">${Icon("edit", { size: 14 })} My account</button>
+            <button class="dropdown-item text-danger" onclick="logout()">${Icon("logout", { size: 14 })} Sign out</button>
           </div>
-          <button class="signout" onclick="logout()">Sign out</button>
         </div>
       </div>`;
   }
@@ -112,8 +139,8 @@ function doRenderLayout(active, pageTitle, user, opts) {
   if (topbarEl) {
     topbarEl.innerHTML = `
       <div class="d-flex align-items-center gap-2" style="min-width:0">
-        <button class="icon-btn tb-nav-toggle" id="nav-toggle" title="Collapse sidebar" aria-label="Collapse sidebar">☰</button>
-        <button class="icon-btn tb-hamburger" id="nav-hamburger" title="Menu" aria-label="Open menu">☰</button>
+        <button class="icon-btn tb-nav-toggle" id="nav-toggle" title="Collapse sidebar" aria-label="Collapse sidebar">${Icon("menu")}</button>
+        <button class="icon-btn tb-hamburger" id="nav-hamburger" title="Menu" aria-label="Open menu">${Icon("menu")}</button>
         <div class="crumbs">
           <span class="page-h">${esc(pageTitle || "")}</span>
           ${opts.crumb ? `<span class="sub">${esc(opts.crumb)}</span>` : ""}
@@ -121,18 +148,18 @@ function doRenderLayout(active, pageTitle, user, opts) {
       </div>
       <div class="tb-right">
         <div class="tb-search">
-          <span class="s-ico">🔍</span>
+          <span class="s-ico">${Icon("search", { size: 15 })}</span>
           <input id="tb-search-input" placeholder="Search clients, chats…" autocomplete="off" />
           <div class="tb-results d-none" id="tb-results"></div>
         </div>
         ${actions}
-        <button class="icon-btn" id="theme-toggle" title="Toggle light / dark">🌙</button>
+        <button class="icon-btn" id="theme-toggle" title="Toggle light / dark">${Icon("moon")}</button>
         <div class="dropdown">
-          <button class="icon-btn" id="tb-bell" data-bs-toggle="dropdown" title="Notifications">🔔</button>
+          <button class="icon-btn" id="tb-bell" data-bs-toggle="dropdown" title="Notifications">${Icon("bell")}</button>
           <div class="dropdown-menu dropdown-menu-end p-0" style="width:320px" id="tb-notif"></div>
         </div>
         <div class="dropdown">
-          <button class="icon-btn" data-bs-toggle="dropdown" title="Help">❔</button>
+          <button class="icon-btn" data-bs-toggle="dropdown" title="Help">${Icon("help")}</button>
           <div class="dropdown-menu dropdown-menu-end p-3" style="width:260px">
             <h6 class="mb-1" style="font-family:var(--display)">ClientHub</h6>
             <p class="muted small mb-2">Bitrix24 Local App</p>
@@ -183,7 +210,7 @@ function wireChrome() {
   const shell = document.querySelector(".app-shell");
   const navToggle = document.getElementById("nav-toggle");
   if (navToggle && shell) navToggle.onclick = () => {
-    shell.classList.toggle("nav-collapsed");
+    setNavCollapsed(shell, !shell.classList.contains("nav-collapsed"));
     localStorage.setItem("ch_nav", shell.classList.contains("nav-collapsed") ? "collapsed" : "expanded");
   };
 
@@ -210,9 +237,10 @@ function toggleTheme() {
 }
 function updateThemeIcon() {
   const b = document.getElementById("theme-toggle");
-  if (b) b.textContent = document.documentElement.getAttribute("data-theme") === "dark" ? "☀️" : "🌙";
+  if (b) b.innerHTML = Icon(document.documentElement.getAttribute("data-theme") === "dark" ? "sun" : "moon");
 }
 
+// Search, notifications topbar wiring
 function wireTopbar() {
   const input = document.getElementById("tb-search-input");
   const results = document.getElementById("tb-results");
@@ -240,7 +268,7 @@ function wireTopbar() {
     if (cls.length) h += '<div class="res-cat">Clients</div>' + cls.map((c) =>
       `<a class="res" href="/client?id=${c.id}">${avBox(c.name)}<div><div style="font-weight:600;font-size:13px">${esc(c.name)}</div><div class="muted" style="font-size:11px">${esc(c.company || "")}</div></div></a>`).join("");
     if (cvs.length) h += '<div class="res-cat">Conversations</div>' + cvs.map((c) =>
-      `<a class="res" href="/conversations?client=${c.client_id}"><span class="av" style="background:var(--brand-soft);color:var(--brand)">💬</span><div><div style="font-weight:600;font-size:13px">${esc(c.title || "Conversation")}</div><div class="muted" style="font-size:11px">${esc(d.cmap[c.client_id] || "")}</div></div></a>`).join("");
+      `<a class="res" href="/conversations?client=${c.client_id}"><span class="av" style="background:var(--brand-soft);color:var(--brand)">${Icon("message", { size: 15 })}</span><div><div style="font-weight:600;font-size:13px">${esc(c.title || "Conversation")}</div><div class="muted" style="font-size:11px">${esc(d.cmap[c.client_id] || "")}</div></div></a>`).join("");
     results.innerHTML = h;
     results.classList.remove("d-none");
   }
@@ -278,7 +306,7 @@ function confirmDialog(message, opts = {}) {
       document.body.insertAdjacentHTML("beforeend", `
         <div class="modal fade" id="confirmModal" tabindex="-1"><div class="modal-dialog modal-dialog-centered" style="max-width:430px">
           <div class="modal-content"><div class="modal-body text-center p-4">
-            <div class="confirm-icon" id="confirm-icon">🗑️</div>
+            <div class="confirm-icon" id="confirm-icon"></div>
             <h5 class="mt-3 mb-2" id="confirm-title" style="font-family:var(--display);font-weight:600"></h5>
             <p class="muted mb-0" id="confirm-msg" style="font-size:13.5px;line-height:1.5"></p>
           </div>
@@ -289,7 +317,7 @@ function confirmDialog(message, opts = {}) {
       el = document.getElementById("confirmModal");
     }
     const danger = opts.danger !== false;
-    document.getElementById("confirm-icon").textContent = danger ? "🗑️" : "❓";
+    document.getElementById("confirm-icon").innerHTML = Icon(danger ? "trash" : "help", { size: 24 });
     document.getElementById("confirm-icon").className = "confirm-icon" + (danger ? " danger" : "");
     document.getElementById("confirm-title").textContent = opts.title || "Are you sure?";
     document.getElementById("confirm-msg").textContent = message || "";
@@ -327,7 +355,7 @@ function ensureAccountModal() {
         <input type="password" class="form-control" id="acc-current" /></div>
       <div class="mb-1"><label class="form-label">New password</label>
         <div class="input-group"><input type="password" class="form-control" id="acc-new" />
-          <button class="btn btn-soft" type="button" id="acc-toggle">👁</button></div>
+          <button class="btn btn-soft" type="button" id="acc-toggle">${Icon("eye", { size: 14 })}</button></div>
         <div class="pw-meter"><span></span></div></div>
       <div class="mb-2"><label class="form-label">Confirm new password</label>
         <input type="password" class="form-control" id="acc-confirm" /></div>

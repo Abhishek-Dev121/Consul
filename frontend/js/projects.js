@@ -42,7 +42,6 @@
     const paginated = filteredProjects.slice((page - 1) * pageSize, page * pageSize);
 
     const rowsHtml = paginated.length ? paginated.map((p) => {
-      const prog = progressOf(p);
       const done = p.tasks.filter((t) => DONE.includes((t.status || "").toLowerCase())).length;
       return `<tr>
         <td><div class="nm" style="font-weight:600">${esc(p.title)}</div>
@@ -51,7 +50,7 @@
         <td>${statusPill(p.status)}</td>
         <td>${ownerCell(p)}</td>
         <td class="mono" style="font-size:12px;color:var(--muted)">${done} / ${p.tasks.length}</td></tr>`;
-    }).join("") : `<tr><td colspan="5"><div class="empty"><span class="em-ico">📁</span>No ${statusFilter === "all" ? "" : statusFilter + " "}projects found.</div></td></tr>`;
+    }).join("") : `<tr><td colspan="5"><div class="empty"><span class="em-ico">${Icon('folder', { size: 24 })}</span>No ${statusFilter === "all" ? "" : statusFilter + " "}projects found.</div></td></tr>`;
 
     let pagerHtml = "";
     if (filteredProjects.length > pageSize) {
@@ -106,8 +105,8 @@
       Api.get("/api/projects"),
       Api.get("/api/overview/clients").catch(() => []),
     ]);
-    projectsList = projects;
     clientNames = Object.fromEntries(clients.map((c) => [c.id, c.name]));
+    projectsList = projects;
     renderTable();
   } catch (e) { toast(e.message); }
 })();

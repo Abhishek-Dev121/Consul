@@ -56,7 +56,7 @@
           <p class="mb-0 text-muted" style="font-size:13px">Weekly communication volume, sentiment trends, team productivity and client engagement.</p>
         </div>
         <div class="dropdown no-print">
-          <button class="btn btn-primary btn-sm dropdown-toggle" data-bs-toggle="dropdown">📥 Export Report</button>
+          <button class="btn btn-primary btn-sm dropdown-toggle" data-bs-toggle="dropdown">${Icon("download", { size: 14 })} Export Report</button>
           <ul class="dropdown-menu dropdown-menu-end">
             <li><button class="dropdown-item" id="export-csv-btn">Export CSV</button></li>
             <li><button class="dropdown-item" id="export-excel-btn">Export Excel</button></li>
@@ -66,10 +66,10 @@
       </div>
 
       <div class="grid g-4" style="margin-bottom:16px">
-        ${kpi("💬", "Chats this week", d.kpis.chats_week, "rolling 7 days")}
-        ${kpi("📞", "Calls this week", d.kpis.calls_week, "rolling 7 days")}
-        ${kpi("⏱", "Avg response", fmtResp(d.kpis.avg_response_seconds), "from AI metrics")}
-        ${kpi("✨", "Analyzed chats", d.kpis.analyzed, "total")}
+        ${kpi(Icon("message", { size: 18 }), "Chats this week", d.kpis.chats_week, "rolling 7 days")}
+        ${kpi(Icon("phone", { size: 18 }), "Calls this week", d.kpis.calls_week, "rolling 7 days")}
+        ${kpi(Icon("clock", { size: 18 }), "Avg response", fmtResp(d.kpis.avg_response_seconds), "from AI metrics")}
+        ${kpi(Icon("sparkles", { size: 18 }), "Analyzed chats", d.kpis.analyzed, "total")}
       </div>
 
       <div class="grid" style="grid-template-columns:1.5fr 1fr;align-items:start">
