@@ -22,16 +22,67 @@
   }
   const size = (b) => (b ? (b > 1e6 ? (b / 1e6).toFixed(1) + " MB" : (b / 1024).toFixed(0) + " KB") : "—");
 
-  let docs = [], cat = "All";
+  let docs = [], cat = "All", activeClientFolder = "all";
 
   function render() {
     const cats = ["All", "Document", "Image", "Spreadsheet", "Presentation", "Link", "File"];
-    const list = docs.filter((d) => cat === "All" || typeOf(d.filename, d.content_type, d.storage_key).cat === cat);
+    
+    // Group files by client folders
+    const folderCounts = {};
+    docs.forEach((d) => {
+      folderCounts[d.client] = (folderCounts[d.client] || 0) + 1;
+    });
+    const uniqueClients = Object.keys(folderCounts).sort();
+
+    const allActive = activeClientFolder === "all";
+    const allFolderHtml = `
+      <div class="card p-3 d-flex flex-row align-items-center gap-3 folder-card ${allActive ? 'border-primary bg-primary-subtle' : ''}" 
+           style="cursor:pointer; width:220px; flex-shrink:0; border-radius:10px" 
+           onclick="window.selectFolder('all')">
+        <div class="folder-icon text-primary" style="font-size:24px">&#128193;</div>
+        <div style="min-width:0; flex:1">
+          <strong style="font-size:13.5px; display:block">All Folders</strong>
+          <span class="text-muted" style="font-size:11.5px">${docs.length} files</span>
+        </div>
+      </div>`;
+
+    const foldersHtml = uniqueClients.map(cName => {
+      const count = folderCounts[cName];
+      const isActive = cName === activeClientFolder;
+      return `
+        <div class="card p-3 d-flex flex-row align-items-center gap-3 folder-card ${isActive ? 'border-primary bg-primary-subtle' : ''}" 
+             style="cursor:pointer; width:220px; flex-shrink:0; border-radius:10px" 
+             onclick="window.selectFolder('${esc(cName)}')">
+          <div class="folder-icon text-warning" style="font-size:24px">&#128194;</div>
+          <div style="min-width:0; flex:1">
+            <strong style="font-size:13.5px; display:block; white-space:nowrap; overflow:hidden; text-overflow:ellipsis">${esc(cName)}</strong>
+            <span class="text-muted" style="font-size:11.5px">${count} file${count === 1 ? '' : 's'}</span>
+          </div>
+        </div>`;
+    }).join("");
+
+    const filteredDocs = activeClientFolder === "all" ? docs : docs.filter(d => d.client === activeClientFolder);
+    const list = filteredDocs.filter((d) => cat === "All" || typeOf(d.filename, d.content_type, d.storage_key).cat === cat);
+
     document.getElementById("view").innerHTML = `
       <div class="page-head"><div><h2>Documents</h2>
         <p>Files linked to clients — contracts, requirements, images and project docs.</p></div></div>
-      <div class="toolbar" style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap">
-        ${cats.map((c) => `<button class="chip ${c === cat ? "info" : ""}" data-c="${c}" style="cursor:pointer">${c}</button>`).join("")}</div>
+      
+      <h3 class="mb-3" style="font-size:15px; font-family:var(--display); color:var(--ink)">Client Folders</h3>
+      <div class="d-flex gap-3 mb-4 overflow-x-auto pb-2" style="max-width:100%">
+        ${allFolderHtml}
+        ${foldersHtml}
+      </div>
+
+      <div class="d-flex justify-content-between align-items-center mb-3">
+        <h3 style="font-size:15px; font-family:var(--display); color:var(--ink); margin:0">
+          ${activeClientFolder === 'all' ? 'All Documents' : esc(activeClientFolder) + ' Documents'}
+        </h3>
+        <div class="toolbar" style="display:flex;gap:8px;margin:0;flex-wrap:wrap">
+          ${cats.map((c) => `<button class="chip ${c === cat ? "info" : ""}" data-c="${c}" style="cursor:pointer">${c}</button>`).join("")}
+        </div>
+      </div>
+
       <div class="grid g-4">${list.length ? list.map((d) => {
         const ty = typeOf(d.filename, d.content_type, d.storage_key);
         const clickAction = d.content_type === "url"
@@ -87,9 +138,15 @@
           </div>
           ${analysisBox}
         </div>`;
-      }).join("") : '<div class="empty" style="grid-column:1/-1"><span class="em-ico">📄</span>No documents yet. Upload from a client profile.</div>'}</div>`;
+      }).join("") : '<div class="empty" style="grid-column:1/-1"><span class="em-ico">📄</span>No documents yet inside this folder. Upload one from a client profile or using the button above.</div>'}</div>`;
+    
     document.querySelectorAll("[data-c]").forEach((el) => el.addEventListener("click", () => { cat = el.dataset.c; render(); }));
   }
+
+  window.selectFolder = (folderName) => {
+    activeClientFolder = folderName;
+    render();
+  };
 
   window.toggleAIAnalysis = (id) => {
     const box = document.getElementById(`ai-box-${id}`);
@@ -147,6 +204,18 @@
     Api.get("/api/overview/clients").then((cl) => {
       upClient.innerHTML = '<option value="">Select a client...</option>' + 
         cl.map((c) => `<option value="${c.id}">${esc(c.name)}</option>`).join("");
+      
+      // Auto pre-select client if user is currently inside a client folder
+      document.getElementById("upload-btn")?.addEventListener("click", () => {
+        if (activeClientFolder !== "all") {
+          const opts = Array.from(upClient.options);
+          const match = opts.find(o => o.text === activeClientFolder);
+          if (match) {
+            upClient.value = match.value;
+            loadProjectsForClient(match.value);
+          }
+        }
+      });
     }).catch(() => {});
     
     upClient.addEventListener("change", () => {
@@ -159,6 +228,8 @@
       if (!cid) return toast("Select a client");
       
       const type = document.getElementById("up-type").value;
+      const clientName = upClient.options[upClient.selectedIndex].text;
+      
       if (type === "file") {
         const file = document.getElementById("up-file").files[0];
         if (!file) return toast("Choose a file");
@@ -171,7 +242,9 @@
           bootstrap.Modal.getOrCreateInstance(document.getElementById("uploadModal")).hide();
           document.getElementById("up-file").value = "";
           upProj.innerHTML = '<option value="">Select Project (Optional)</option>';
-          docs = await Api.get("/api/overview/documents"); render();
+          docs = await Api.get("/api/overview/documents");
+          activeClientFolder = clientName;
+          render();
           toast("Document uploaded", "success");
         } catch (e) { toast(e.message); }
       } else {
@@ -189,7 +262,9 @@
           document.getElementById("up-link-title").value = "";
           document.getElementById("up-link-url").value = "";
           upProj.innerHTML = '<option value="">Select Project (Optional)</option>';
-          docs = await Api.get("/api/overview/documents"); render();
+          docs = await Api.get("/api/overview/documents");
+          activeClientFolder = clientName;
+          render();
           toast("Link added", "success");
         } catch (e) { toast(e.message); }
       }

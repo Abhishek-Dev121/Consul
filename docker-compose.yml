@@ -27,7 +27,7 @@ services:
     env_file: .env
     environment:
       # Override hosts so the container reaches the compose services.
-      DATABASE_URL: postgresql+psycopg2://postgres:postgres@db:5432/comm_agent
+      # DATABASE_URL: postgresql+psycopg2://postgres:postgres@db:5432/comm_agent
       REDIS_URL: redis://redis:6379/0
     depends_on:
       db:

@@ -11,7 +11,7 @@
   }
   const dur = (s) => (s == null ? "—" : `${Math.floor(s / 60)}:${String(Math.round(s % 60)).padStart(2, "0")}`);
 
-  let calls = [];
+  let calls = [], clientsList = [];
   let activeClientFolder = "all";
 
   function list(items) {
@@ -43,11 +43,18 @@
 
   function render() {
     const folderCounts = {};
+    clientsList.forEach(c => {
+      folderCounts[c.name] = 0;
+    });
     calls.forEach(c => {
-      folderCounts[c.client] = (folderCounts[c.client] || 0) + 1;
+      if (folderCounts[c.client] !== undefined) {
+        folderCounts[c.client] += 1;
+      } else {
+        folderCounts[c.client] = 1;
+      }
     });
     
-    const uniqueClients = Object.keys(folderCounts).sort();
+    const uniqueClients = clientsList.map(c => c.name).sort();
     
     const foldersHtml = uniqueClients.map(cName => {
       const count = folderCounts[cName];
@@ -140,25 +147,25 @@
     Api.get("/api/overview/clients").then((cl) => {
       upClient.innerHTML = '<option value="">Select a client...</option>' + 
         cl.map((c) => `<option value="${c.id}">${esc(c.name)}</option>`).join("");
+      
+      // Auto pre-select client if user is currently inside a client folder
+      document.getElementById("upload-btn")?.addEventListener("click", () => {
+        if (activeClientFolder !== "all") {
+          const opts = Array.from(upClient.options);
+          const match = opts.find(o => o.text === activeClientFolder);
+          if (match) {
+            upClient.value = match.value;
+            loadProjectsForClient(match.value);
+          }
+        } else {
+          upClient.value = "";
+          upProj.innerHTML = '<option value="">Select Project (Optional)</option>';
+        }
+      });
     }).catch(() => {});
     
     upClient.addEventListener("change", () => {
       loadProjectsForClient(upClient.value);
-    });
-
-    // Auto pre-select client if user is currently inside a client folder
-    document.getElementById("upload-btn")?.addEventListener("click", () => {
-      if (activeClientFolder !== "all") {
-        const opts = Array.from(upClient.options);
-        const match = opts.find(o => o.text === activeClientFolder);
-        if (match) {
-          upClient.value = match.value;
-          loadProjectsForClient(match.value);
-        }
-      } else {
-        upClient.value = "";
-        upProj.innerHTML = '<option value="">Select Project (Optional)</option>';
-      }
     });
 
     document.getElementById("up-save").addEventListener("click", async () => {
@@ -168,6 +175,7 @@
       if (!cid) return toast("Select a client");
       if (!file) return toast("Choose an audio file");
       
+      const clientName = upClient.options[upClient.selectedIndex].text;
       const fd = new FormData();
       fd.append("client_id", cid);
       fd.append("upload", file);
@@ -178,7 +186,8 @@
         bootstrap.Modal.getOrCreateInstance(document.getElementById("uploadModal")).hide();
         document.getElementById("up-file").value = "";
         upProj.innerHTML = '<option value="">Select Project (Optional)</option>';
-        calls = await Api.get("/api/overview/calls"); 
+        calls = await Api.get("/api/overview/calls");
+        activeClientFolder = clientName;
         render();
         toast("Recording uploaded", "success");
       } catch (e) { toast(e.message); }
@@ -186,7 +195,12 @@
   }
 
   try { 
-    calls = await Api.get("/api/overview/calls"); 
+    const [cls, allCalls] = await Promise.all([
+      Api.get("/api/overview/clients"),
+      Api.get("/api/overview/calls")
+    ]);
+    clientsList = cls;
+    calls = allCalls;
     render(); 
   } catch (e) { toast(e.message); }
 })();

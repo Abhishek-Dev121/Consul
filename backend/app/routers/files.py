@@ -1,6 +1,6 @@
 import io
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, Request
 from fastapi.responses import StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -146,16 +146,25 @@ def add_document_link(
 
 
 @router.get("/{file_id}/download")
-def download_file(file_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+def download_file(file_id: int, request: Request, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     rec = db.get(FileRecord, file_id)
     if not rec:
         raise HTTPException(status_code=404, detail="File not found")
     ensure_client_access(user, _client(db, rec.client_id))
     data = storage_service.read_bytes(rec.storage_key)
-    return StreamingResponse(
-        io.BytesIO(data),
-        media_type=rec.content_type or "application/octet-stream",
-        headers={"Content-Disposition": f'attachment; filename="{rec.filename}"'},
+    ext = rec.filename.lower()
+    is_inline = any(ext.endswith(e) for e in [
+        ".mp4", ".mov", ".m4v", ".webm", ".avi", ".mkv",
+        ".mp3", ".wav", ".m4a", ".ogg",
+        ".png", ".jpg", ".jpeg", ".gif", ".webp",
+        ".pdf", ".txt"
+    ])
+    return storage_service.range_response(
+        request,
+        data,
+        rec.content_type or "application/octet-stream",
+        rec.filename,
+        inline=is_inline
     )
 
 

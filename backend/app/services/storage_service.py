@@ -80,3 +80,49 @@ def _s3_client():
 if settings.storage_backend == "local":
     os.makedirs(settings.local_storage_dir, exist_ok=True)
 
+
+def range_response(request, data: bytes, content_type: str, filename: str, inline: bool = False):
+    from fastapi.responses import Response
+    
+    headers = {
+        "Accept-Ranges": "bytes",
+        "Content-Disposition": f"{'inline' if inline else 'attachment'}; filename=\"{filename}\"",
+    }
+    
+    range_header = request.headers.get("Range")
+    if not range_header:
+        return Response(
+            content=data,
+            status_code=200,
+            media_type=content_type,
+            headers=headers
+        )
+        
+    match = re.match(r"bytes=(\d+)-(\d*)", range_header)
+    if not match:
+        return Response(status_code=400, content="Invalid Range Header")
+        
+    start_str, end_str = match.groups()
+    file_size = len(data)
+    
+    start = int(start_str)
+    end = int(end_str) if end_str else file_size - 1
+    
+    if start >= file_size or end >= file_size or start > end:
+        return Response(
+            status_code=416,
+            content="Requested Range Not Satisfiable",
+            headers={"Content-Range": f"bytes */{file_size}"}
+        )
+        
+    chunk = data[start : end + 1]
+    headers["Content-Range"] = f"bytes {start}-{end}/{file_size}"
+    headers["Content-Length"] = str(len(chunk))
+    
+    return Response(
+        content=chunk,
+        status_code=206,
+        media_type=content_type,
+        headers=headers
+    )
+

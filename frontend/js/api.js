@@ -9,6 +9,10 @@
 // Thin fetch wrapper that attaches the JWT and centralises error handling.
 const TOKEN_KEY = "comm_agent_token";
 
+const BASE_URL = (location.hostname === "localhost" || location.hostname === "127.0.0.1") && location.port !== "8000" && location.port !== "80"
+  ? "http://127.0.0.1:8000"
+  : "";
+
 const Api = {
   // Token lives in localStorage when "remember me" is on (survives restart),
   // otherwise in sessionStorage (cleared when the tab/browser closes).
@@ -28,7 +32,8 @@ const Api = {
       headers["Content-Type"] = "application/json";
       payload = JSON.stringify(body);
     }
-    const res = await fetch(path, { method, headers, body: payload });
+    const targetPath = path.startsWith("http") ? path : (BASE_URL + path);
+    const res = await fetch(targetPath, { method, headers, body: payload });
     if (res.status === 401) {
       Api.clearToken();
       if (!location.pathname.endsWith("/login")) location.href = "/login";
@@ -70,7 +75,7 @@ const Api = {
     const form = new URLSearchParams();
     form.set("username", email);
     form.set("password", password);
-    const res = await fetch("/api/auth/login", {
+    const res = await fetch(BASE_URL + "/api/auth/login", {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body: form.toString(),

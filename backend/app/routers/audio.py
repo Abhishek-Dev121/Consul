@@ -1,6 +1,6 @@
 import io
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, Request
 from fastapi.responses import StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -70,12 +70,12 @@ async def upload_audio(
             prefix = f"{c_dir}/projects/{clean_title}"
 
     data = await upload.read()
-    key = storage_service.save_bytes(data, upload.filename or "audio", prefix=prefix)
+    key = storage_service.save_bytes(data, upload.filename or "audio.mp3", prefix=prefix)
     
     rec = AudioRecording(
         client_id=client_id,
         project_id=project_id,
-        filename=upload.filename or "audio",
+        filename=upload.filename or "audio.mp3",
         storage_key=key,
         content_type=upload.content_type,
         uploaded_by=actor.id,
@@ -90,16 +90,18 @@ async def upload_audio(
 
 
 @router.get("/{audio_id}/download")
-def download_audio(audio_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+def download_audio(audio_id: int, request: Request, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     rec = db.get(AudioRecording, audio_id)
     if not rec:
         raise HTTPException(status_code=404, detail="Audio not found")
     ensure_client_access(user, _client(db, rec.client_id))
     data = storage_service.read_bytes(rec.storage_key)
-    return StreamingResponse(
-        io.BytesIO(data),
-        media_type=rec.content_type or "audio/mpeg",
-        headers={"Content-Disposition": f'inline; filename="{rec.filename}"'},
+    return storage_service.range_response(
+        request,
+        data,
+        rec.content_type or "audio/mpeg",
+        rec.filename,
+        inline=True
     )
 
 

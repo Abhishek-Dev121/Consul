@@ -206,26 +206,30 @@
         body.innerHTML = `<div class="day-sep2"><span>— conversation —</span></div>` +
           msgs.map((m) => {
             let content;
+            const token = Api.token();
+            const rawUrl = m.attachment_url || "";
+            const isExternal = rawUrl.startsWith("http");
+            const url = (rawUrl && !isExternal && token) ? `${rawUrl}?token=${token}` : rawUrl;
+            
             const extLower = (m.attachment_name || "").toLowerCase();
             const isVideo = extLower.endsWith(".mp4") || extLower.endsWith(".mov") || extLower.endsWith(".m4v") || extLower.endsWith(".webm") || extLower.endsWith(".avi") || extLower.endsWith(".mkv");
             const isImage = extLower.endsWith(".png") || extLower.endsWith(".jpg") || extLower.endsWith(".jpeg") || extLower.endsWith(".gif") || extLower.endsWith(".webp");
             if (m.attachment_type === "audio") {
               if (isVideo) {
-                content = `<div class="att-video"><video controls preload="none" src="${esc(m.attachment_url)}" style="max-width:320px; border-radius:8px; display:block;"></video></div>`;
+                content = `<div class="att-video"><video controls preload="none" src="${esc(url)}" style="max-width:320px; border-radius:8px; display:block;"></video></div>`;
               } else {
-                content = `<div class="att-audio"><audio controls preload="none" src="${esc(m.attachment_url)}"></audio></div>`;
+                content = `<div class="att-audio"><audio controls preload="none" src="${esc(url)}"></audio></div>`;
               }
             } else if (m.attachment_type === "file") {
               if (isImage) {
-                content = `<div class="att-image"><img src="${esc(m.attachment_url)}" style="max-width:320px; max-height:240px; border-radius:8px; display:block; cursor:pointer;" onclick="window.open('${esc(m.attachment_url)}', '_blank')" /></div>`;
+                content = `<div class="att-image"><img src="${esc(url)}" style="max-width:320px; max-height:240px; border-radius:8px; display:block; cursor:pointer;" onclick="window.open('${esc(url)}', '_blank')" /></div>`;
               } else {
-                const isUrl = (m.attachment_url || "").startsWith("http");
-                const ext = isUrl ? "LINK" : (m.attachment_name || "file").split(".").pop().toUpperCase().slice(0, 4);
-                content = `<a class="att-file" href="${esc(m.attachment_url)}" target="_blank" rel="noopener">
+                const ext = isExternal ? "LINK" : (m.attachment_name || "file").split(".").pop().toUpperCase().slice(0, 4);
+                content = `<a class="att-file" href="${esc(url)}" target="_blank" rel="noopener">
                   <div class="file-ic">${ext}</div>
                   <div class="file-info">
                     <div class="file-name">${esc(m.attachment_name || "Download")}</div>
-                    <div class="file-sub">${isUrl ? "Open link in new tab" : "Click to download"}</div>
+                    <div class="file-sub">${isExternal ? "Open link in new tab" : "Click to download"}</div>
                   </div>
                   <svg class="dl-ic" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
                 </a>`;
