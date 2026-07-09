@@ -17,7 +17,7 @@
       <main class="content">
         <div class="card" style="max-width:680px"><div class="card-body">
           <div class="stat mb-2 p-0">
-            <div class="stat-ico tint-sky">🔗</div>
+            <div class="stat-ico tint-sky"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 15l6-6"/><path d="M10 6l1-1a3.5 3.5 0 0 1 5 5l-1 1"/><path d="M14 18l-1 1a3.5 3.5 0 0 1-5-5l1-1"/></svg></div>
             <div><div class="stat-val" style="font-size:1.1rem" id="status">Checking…</div>
               <div class="stat-label">Bitrix24 connection</div></div>
           </div>
@@ -41,7 +41,7 @@
           const s = await Api.get("/api/bitrix/status");
           const el = document.getElementById("status");
           if (s.connected) {
-            el.textContent = s.method === "webhook" ? "Connected (Webhook) ✅" : "Connected (OAuth) ✅";
+            el.innerHTML = (s.method === "webhook" ? "Connected (Webhook) " : "Connected (OAuth) ") + Icon("check", { size: 15 });
             el.className = "stat-val text-success";
           } else {
             el.textContent = "Not connected";

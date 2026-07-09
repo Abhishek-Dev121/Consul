@@ -43,7 +43,7 @@
         <td><div style="display:flex;align-items:center;gap:8px"><div class="pbar" style="min-width:60px">
           <div style="width:${prog}%;background:${prog === 100 ? "var(--pos)" : "var(--brand)"}"></div></div>
           <span class="mono" style="font-size:11px;color:var(--muted)">${prog}%</span></div></td></tr>`;
-    }).join("") : '<tr><td colspan="7"><div class="empty"><span class="em-ico">📁</span>No projects yet. Connect Bitrix24 and sync from a client.</div></td></tr>';
+    }).join("") : `<tr><td colspan="7"><div class="empty"><span class="em-ico">${Icon('folder', { size: 24 })}</span>No projects yet. Connect Bitrix24 and sync from a client.</div></td></tr>`;
 
     document.getElementById("view").innerHTML = `
       <div class="page-head"><div><h2>Projects</h2>

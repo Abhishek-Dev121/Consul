@@ -31,7 +31,7 @@
     document.getElementById("empty-center").style.display = "flex";
     document.getElementById("thread-wrap").style.display = "none";
     document.getElementById("ai-scroll").innerHTML = `<div class="ai2-empty">
-      <div class="ai-icon-wrap">&#10024;</div>
+      <div class="ai-icon-wrap">${Icon("sparkles", { size: 24 })}</div>
       <h4>No analysis yet</h4>
       <p>Select a client conversation to view or run AI analysis.</p>
     </div>`;
@@ -68,7 +68,7 @@
     }
     const showDelBtn = view === "archived" ? canPurge : writable;
     const delTitle = view === "archived" ? "Delete permanently" : "Archive";
-    const delIcon = view === "archived" ? "&#x1F5D1;" : "&#x2715;";
+    const delIcon = view === "archived" ? Icon("trash", { size: 13 }) : Icon("x", { size: 13 });
     scroll.innerHTML = list.map((cl) => {
       const plat = platOf(cl);
       return `<div class="ci2 ${cl.id === active ? "on" : ""}" data-id="${cl.id}">
@@ -199,7 +199,7 @@
       const body = document.getElementById("th2-body");
       if (!msgs.length) {
         body.innerHTML = `<div class="conv-empty-state" style="height:auto;padding:40px 0">
-          <div class="icon-wrap" style="width:48px;height:48px;font-size:20px">&#128172;</div>
+          <div class="icon-wrap" style="width:48px;height:48px;font-size:20px">${Icon("message", { size: 20 })}</div>
           <p style="max-width:220px">No messages yet. Start the conversation below.</p>
         </div>`;
       } else {
@@ -257,7 +257,7 @@
       <div class="att-chip">
         <svg width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
         <span class="att-nm">${esc(f.name)}</span>
-        <button class="att-rm" data-idx="${i}" title="Remove">&#x2715;</button>
+        <button class="att-rm" data-idx="${i}" title="Remove">${Icon("x", { size: 12 })}</button>
       </div>`).join("");
     area.querySelectorAll(".att-rm").forEach((b) =>
       b.addEventListener("click", () => {
@@ -325,7 +325,7 @@
     try { convs = await Api.get(`/api/conversations?client_id=${cl.id}&is_deleted=${view === "archived"}`); } catch (_) {}
     if (!convs.length) {
       scroll.innerHTML = `<div class="ai2-empty">
-        <div class="ai-icon-wrap">&#10024;</div>
+        <div class="ai-icon-wrap">${Icon("sparkles", { size: 24 })}</div>
         <h4>No analysis yet</h4>
         <p>Send a message below, or upload a chat log via &ldquo;+ New conversation&rdquo;, to generate a summary, key points and sentiment.</p>
       </div>`;
@@ -336,7 +336,7 @@
     try { a = await Api.get(`/api/ai/conversations/${convId}/analysis`); } catch (_) {}
     if (!a) {
       scroll.innerHTML = `<div class="ai2-empty">
-        <div class="ai-icon-wrap">&#10024;</div>
+        <div class="ai-icon-wrap">${Icon("sparkles", { size: 24 })}</div>
         <h4>Not analyzed yet</h4>
         <p>Run AI analysis on this client's latest conversation.</p>
         ${writable ? `<button class="btn btn-primary btn-sm" id="run-ai" style="margin:0 auto">Run AI analysis</button>` : ""}
@@ -379,7 +379,7 @@
 
   async function runAI(convId) {
     const scroll = document.getElementById("ai-scroll");
-    scroll.innerHTML = `<div class="ai2-empty"><div class="ai-icon-wrap" style="animation:spin 1.2s linear infinite">&#10024;</div><p>Analyzing...</p></div>`;
+    scroll.innerHTML = `<div class="ai2-empty"><div class="ai-icon-wrap" style="animation:spin 1.2s linear infinite">${Icon("sparkles", { size: 24 })}</div><p>Analyzing...</p></div>`;
     try { await Api.post(`/api/ai/conversations/${convId}/analyze`); await renderAI(); toast("Analysis complete", "success"); }
     catch (e) { toast(e.message); renderAI(); }
   }

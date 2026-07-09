@@ -49,7 +49,7 @@
     }
     const grid = document.getElementById("grid");
     if (!list.length) {
-      grid.innerHTML = '<div class="empty" style="grid-column:1/-1"><span class="em-ico">📡</span>No channels match these filters.</div>';
+      grid.innerHTML = `<div class="empty" style="grid-column:1/-1"><span class="em-ico">${Icon("rss", { size: 24 })}</span>No channels match these filters.</div>`;
       return;
     }
     grid.innerHTML = list.map((c) => {
@@ -64,7 +64,7 @@
         <div class="chan-meta">${count} client${count === 1 ? "" : "s"}</div>
         <div class="chan-foot">
           <span class="muted small">Open channel →</span>
-          ${admin ? `<button class="btn btn-sm btn-outline-danger" onclick="event.stopPropagation();delChannel(${c.id})">✕</button>` : ""}
+          ${admin ? `<button class="btn btn-sm btn-outline-danger" onclick="event.stopPropagation();delChannel(${c.id})">${Icon("x", { size: 14 })}</button>` : ""}
         </div>
       </div>`;
     }).join("");

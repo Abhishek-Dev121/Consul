@@ -86,7 +86,7 @@
           ${ch ? chanChip(ch.platform) : `<span class="muted">${esc(client.company || "")}</span>`}
           ${client.company && ch ? `<span class="muted">· ${esc(client.company)}</span>` : ""}</div>
       </div>
-      <button class="btn btn-sm btn-soft me-2" id="team-roster-btn">👥 Project Team</button>
+      <button class="btn btn-sm btn-soft me-2" id="team-roster-btn">${Icon("users", { size: 14 })} Project Team</button>
       <a class="btn btn-sm btn-soft" href="/client?id=${client.id}">Full profile</a>`;
     document.getElementById("team-roster-btn").onclick = showTeamRoster;
   }
@@ -97,7 +97,7 @@
     const body = document.getElementById("chat-body");
     if (!msgs.length) {
       body.innerHTML = `<div class="chat-empty">
-        <div class="ce-ic">💬</div>
+        <div class="ce-ic">${Icon("message", { size: 28 })}</div>
         <div class="ce-title">No messages yet</div>
         <div class="ce-sub">Start the conversation using the box below, or upload a chat log from the client profile.</div>
       </div>`;
@@ -114,7 +114,7 @@
         inner = `<audio controls preload="none" src="${esc(m.attachment_url)}" style="max-width:240px;height:38px"></audio>`;
       } else if (m.attachment_type === "file") {
         inner = `<a class="file-att" href="${esc(m.attachment_url)}" target="_blank" rel="noopener">
-          <span class="fa-ic">📄</span><span class="fa-name">${esc(m.attachment_name || "Download")}</span><span class="fa-dl">⬇</span></a>`;
+          <span class="fa-ic">${Icon("file", { size: 16 })}</span><span class="fa-name">${esc(m.attachment_name || "Download")}</span><span class="fa-dl">${Icon("download", { size: 14 })}</span></a>`;
       } else {
         inner = esc(m.body);
       }

@@ -2,9 +2,9 @@
   const clientId = parseInt(qs("id"));
   if (!clientId) { location.href = "/clients"; return; }
 
-  const actions = `<a class="btn btn-soft" href="/chat?id=${clientId}">💬 Chat</a>
-    <button class="btn btn-soft" id="team-roster-btn">👥 Project Team</button>
-    <button class="btn btn-soft" id="edit-btn">✎ Edit</button>
+  const actions = `<a class="btn btn-soft" href="/chat?id=${clientId}">${Icon("message", { size: 14 })} Chat</a>
+    <button class="btn btn-soft" id="team-roster-btn">${Icon("users", { size: 14 })} Project Team</button>
+    <button class="btn btn-soft" id="edit-btn">${Icon("edit", { size: 14 })} Edit</button>
     <button class="btn btn-primary" id="sync-btn">⟳ Sync Bitrix24</button>`;
   await renderLayout("/clients", "Client profile", { crumb: "Clients", actions });
   const writable = canWrite();
@@ -74,7 +74,7 @@
           if (m.attachment_type === "audio") {
             inner = `<audio controls preload="none" src="${esc(m.attachment_url)}" style="max-width:240px;height:38px"></audio>`;
           } else if (m.attachment_type === "file") {
-            inner = `<a class="btn btn-sm btn-outline-secondary" href="${esc(m.attachment_url)}" target="_blank">📄 ${esc(m.attachment_name || "Download")}</a>`;
+            inner = `<a class="btn btn-sm btn-outline-secondary" href="${esc(m.attachment_url)}" target="_blank">${Icon("file", { size: 14 })} ${esc(m.attachment_name || "Download")}</a>`;
           } else {
             inner = esc(m.body);
           }
@@ -92,7 +92,7 @@
     const notesHtml = c.notes.map((n) => `<li class="small">${esc(n.body)} <span class="muted">— ${fmtDate(n.created_at)}</span></li>`).join("");
     document.getElementById("cd-body").innerHTML = `
       ${chatHtml}
-      ${writable ? `<button class="btn btn-sm btn-success mb-3" onclick="analyzeConversation(${id})">🤖 Run AI analysis</button>` : ""}
+      ${writable ? `<button class="btn btn-sm btn-success mb-3" onclick="analyzeConversation(${id})">${Icon("bot", { size: 14 })} Run AI analysis</button>` : ""}
       <div class="card mb-3"><div class="card-header">AI Analysis</div>
         <div class="card-body" id="analysis-box">${renderAnalysis(analysis)}</div></div>
       <div class="card"><div class="card-header">Internal notes</div><div class="card-body">
@@ -217,7 +217,7 @@
           
           ${writable ? `<div class="d-flex gap-2 mt-3">
             <button class="btn btn-sm btn-outline-primary" onclick="syncProject(${p.id})">⟳ Re-sync Group</button>
-            <button class="btn btn-sm btn-outline-danger" onclick="unlinkProject(${p.id})">🗑 Unlink Project</button>
+            <button class="btn btn-sm btn-outline-danger" onclick="unlinkProject(${p.id})">${Icon("trash", { size: 14 })} Unlink Project</button>
           </div>` : ""}
         </div>
       </div>`;
@@ -310,22 +310,22 @@
     
     const rows = files.map((f) => {
       const isLink = f.content_type === "url";
-      const label = isLink ? "Open Link ↗" : "Download ⬇";
+      const label = isLink ? `${Icon("external", { size: 14 })} Open Link` : `${Icon("download", { size: 14 })} Download`;
       const href = isLink ? f.storage_key : `/api/files/${f.id}/download`;
       const badgeCls = isLink ? "bg-success-subtle text-success-emphasis" : "bg-light text-dark border";
       const badgeText = isLink ? "LINK" : (f.content_type || "FILE").toUpperCase().slice(0, 16);
-      const projBadge = f.project_title ? `<span class="badge bg-secondary-subtle text-secondary-emphasis ms-2" style="font-size:10px">📂 ${esc(f.project_title)}</span>` : "";
-      
+      const projBadge = f.project_title ? `<span class="badge bg-secondary-subtle text-secondary-emphasis ms-2" style="font-size:10px">${Icon("folder", { size: 12 })} ${esc(f.project_title)}</span>` : "";
+
       let actionBtns = `<a class="btn btn-sm ${isLink ? "btn-outline-success" : "btn-outline-secondary"} me-1" href="${esc(href)}" target="_blank">${label}</a>`;
-      
+
       if (f.analysis) {
-        actionBtns += `<button class="btn btn-sm btn-info text-white me-1" type="button" data-bs-toggle="collapse" data-bs-target="#doc-analysis-${f.id}">✨ View AI</button>`;
+        actionBtns += `<button class="btn btn-sm btn-info text-white me-1" type="button" data-bs-toggle="collapse" data-bs-target="#doc-analysis-${f.id}">${Icon("sparkles", { size: 14 })} View AI</button>`;
       } else if (writable) {
-        actionBtns += `<button class="btn btn-sm btn-success me-1" onclick="analyzeDocument(${f.id}, this)">🤖 Analyze</button>`;
+        actionBtns += `<button class="btn btn-sm btn-success me-1" onclick="analyzeDocument(${f.id}, this)">${Icon("bot", { size: 14 })} Analyze</button>`;
       }
-      
+
       if (writable) {
-        actionBtns += `<button class="btn btn-sm btn-outline-danger" onclick="deleteDocument(${f.id})">🗑</button>`;
+        actionBtns += `<button class="btn btn-sm btn-outline-danger" onclick="deleteDocument(${f.id})">${Icon("trash", { size: 14 })}</button>`;
       }
 
       let analysisRow = "";
@@ -345,7 +345,7 @@
             <td colspan="3" class="bg-light p-3">
               <div class="card shadow-sm border-0">
                 <div class="card-header bg-white fw-bold d-flex justify-content-between align-items-center">
-                  <span>✨ Document AI Analysis</span>
+                  <span>${Icon("sparkles", { size: 16 })} Document AI Analysis</span>
                   ${sentimentPill}
                 </div>
                 <div class="card-body">
@@ -477,11 +477,11 @@
     }
     
     const cards = items.map((a) => {
-      const projBadge = a.project_title ? `<span class="badge bg-secondary-subtle text-secondary-emphasis ms-2" style="font-size:10px">📂 ${esc(a.project_title)}</span>` : "";
+      const projBadge = a.project_title ? `<span class="badge bg-secondary-subtle text-secondary-emphasis ms-2" style="font-size:10px">${Icon("folder", { size: 12 })} ${esc(a.project_title)}</span>` : "";
       return `<div class="card mb-2"><div class="card-body">
         <div class="d-flex justify-content-between align-items-center">
           <div><strong>${esc(a.filename)}</strong>${projBadge}</div>
-          ${writable ? `<button class="btn btn-sm btn-success" onclick="analyzeAudio(${a.id})">🤖 Transcribe & analyze</button>` : ""}
+          ${writable ? `<button class="btn btn-sm btn-success" onclick="analyzeAudio(${a.id})">${Icon("bot", { size: 14 })} Transcribe & analyze</button>` : ""}
         </div>
         <div class="small muted">Duration: ${a.duration ? a.duration.toFixed(1) + "s" : "—"}</div>
         <div id="audio-analysis-${a.id}" class="mt-2"></div></div></div>`;

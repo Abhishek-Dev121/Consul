@@ -1,6 +1,6 @@
 (async function () {
   const writable = canWrite();
-  const actions = writable ? `<button class="btn btn-primary" id="upload-btn" data-bs-toggle="modal" data-bs-target="#uploadModal">⬆ Upload document</button>` : "";
+  const actions = writable ? `<button class="btn btn-primary" id="upload-btn" data-bs-toggle="modal" data-bs-target="#uploadModal">${Icon('upload', { size: 14 })} Upload document</button>` : "";
   await renderLayout("/documents", "Documents", { crumb: "Contracts, specs & project files", actions });
 
   function typeOf(name, ct, key) {
@@ -39,7 +39,7 @@
       <div class="card p-3 d-flex flex-row align-items-center gap-3 folder-card ${allActive ? 'border-primary bg-primary-subtle' : ''}" 
            style="cursor:pointer; width:220px; flex-shrink:0; border-radius:10px" 
            onclick="window.selectFolder('all')">
-        <div class="folder-icon text-primary" style="font-size:24px">&#128193;</div>
+        <div class="folder-icon text-primary" style="font-size:24px">${Icon('folder', { size: 20 })}</div>
         <div style="min-width:0; flex:1">
           <strong style="font-size:13.5px; display:block">All Folders</strong>
           <span class="text-muted" style="font-size:11.5px">${docs.length} files</span>
@@ -53,7 +53,7 @@
         <div class="card p-3 d-flex flex-row align-items-center gap-3 folder-card ${isActive ? 'border-primary bg-primary-subtle' : ''}" 
              style="cursor:pointer; width:220px; flex-shrink:0; border-radius:10px" 
              onclick="window.selectFolder('${esc(cName)}')">
-          <div class="folder-icon text-warning" style="font-size:24px">&#128194;</div>
+          <div class="folder-icon text-warning" style="font-size:24px">${Icon('folder', { size: 20 })}</div>
           <div style="min-width:0; flex:1">
             <strong style="font-size:13.5px; display:block; white-space:nowrap; overflow:hidden; text-overflow:ellipsis">${esc(cName)}</strong>
             <span class="text-muted" style="font-size:11.5px">${count} file${count === 1 ? '' : 's'}</span>
@@ -93,7 +93,7 @@
         let analysisBox = "";
         
         if (d.analysis) {
-          aiButton = `<button class="btn btn-sm btn-info text-white ms-2" style="font-size:11px;padding:3px 8px" onclick="event.stopPropagation(); toggleAIAnalysis(${d.id})">✨ View AI</button>`;
+          aiButton = `<button class="btn btn-sm btn-info text-white ms-2" style="font-size:11px;padding:3px 8px" onclick="event.stopPropagation(); toggleAIAnalysis(${d.id})">${Icon('sparkles', { size: 14 })} View AI</button>`;
           
           const a = d.analysis;
           const keyPoints = (a.key_points || []).map(p => `<li>${esc(p)}</li>`).join("");
@@ -103,7 +103,7 @@
           analysisBox = `
             <div class="doc-analysis-box d-none mt-3 p-3 bg-light rounded border text-start" id="ai-box-${d.id}" onclick="event.stopPropagation();">
               <div class="d-flex justify-content-between align-items-center mb-2">
-                <strong style="font-size:13px">✨ AI Analysis</strong>
+                <strong style="font-size:13px">${Icon('sparkles', { size: 14 })} AI Analysis</strong>
                 <span class="badge bg-${sentimentClass}-subtle text-${sentimentClass}-emphasis" style="font-size:10px">${(a.sentiment || 'neutral').toUpperCase()}</span>
               </div>
               <p class="mb-2 text-muted" style="font-size:12.5px;line-height:1.4"><strong>Summary:</strong> ${esc(a.summary || "No summary available.")}</p>
@@ -120,7 +120,7 @@
             </div>
           `;
         } else if (writable) {
-          aiButton = `<button class="btn btn-sm btn-success ms-2" style="font-size:11px;padding:3px 8px" onclick="event.stopPropagation(); runDocumentAI(${d.id}, this)">🤖 Analyze</button>`;
+          aiButton = `<button class="btn btn-sm btn-success ms-2" style="font-size:11px;padding:3px 8px" onclick="event.stopPropagation(); runDocumentAI(${d.id}, this)">${Icon('bot', { size: 14 })} Analyze</button>`;
         }
 
         return `<div class="doc-card" style="display:flex;flex-direction:column;cursor:pointer;height:auto;padding:16px;box-shadow:var(--sh-s)" onclick="${clickAction}">
@@ -130,7 +130,7 @@
               <h4 style="margin:0 0 4px;font-size:14.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(d.filename)}</h4>
               <div class="dm" style="font-size:12px;color:var(--muted-2)">${ty.cat} ${d.content_type === "url" ? "" : `· ${size(d.size)}`}</div>
               <div class="dm" style="margin-top:2px;display:flex;align-items:center;gap:6px;font-size:11.5px;color:var(--muted-2)">
-                ${esc(d.client)} ${d.project_title ? `<span class="badge bg-secondary-subtle text-secondary-emphasis" style="font-size:9.5px;padding:2px 6px">📂 ${esc(d.project_title)}</span>` : ""}
+                ${esc(d.client)} ${d.project_title ? `<span class="badge bg-secondary-subtle text-secondary-emphasis" style="font-size:9.5px;padding:2px 6px">${Icon('folder', { size: 12 })} ${esc(d.project_title)}</span>` : ""}
               </div>
               <div class="dlink" style="font-size:11px;color:var(--muted-2);margin-top:4px">${esc(d.by)} · ${d.created_at ? fmtDate(d.created_at) : ""}</div>
             </div>
@@ -138,7 +138,7 @@
           </div>
           ${analysisBox}
         </div>`;
-      }).join("") : '<div class="empty" style="grid-column:1/-1"><span class="em-ico">📄</span>No documents yet inside this folder. Upload one from a client profile or using the button above.</div>'}</div>`;
+      }).join("") : `<div class="empty" style="grid-column:1/-1"><span class="em-ico">${Icon('file', { size: 24 })}</span>No documents yet inside this folder. Upload one from a client profile or using the button above.</div>`}</div>`;
     
     document.querySelectorAll("[data-c]").forEach((el) => el.addEventListener("click", () => { cat = el.dataset.c; render(); }));
   }

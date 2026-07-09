@@ -1,5 +1,5 @@
 (async function () {
-  const actions = `<button class="btn btn-primary" id="upload-btn" data-bs-toggle="modal" data-bs-target="#uploadModal">⬆ Upload recording</button>`;
+  const actions = `<button class="btn btn-primary" id="upload-btn" data-bs-toggle="modal" data-bs-target="#uploadModal">${Icon('upload', { size: 14 })} Upload recording</button>`;
   await renderLayout("/calls", "Call Recordings", { crumb: "Uploaded calls with AI analysis", actions });
   const writable = canWrite();
   if (!writable) { const b = document.getElementById("upload-btn"); if (b) b.remove(); }
@@ -19,15 +19,15 @@
     return items.length ? items.map((c) => {
       const a = c.analysis;
       const body = a ? `<div class="card-pad" style="display:grid;grid-template-columns:1.4fr 1fr 1fr;gap:20px;border-top:1px solid var(--line-2)">
-          <div>${lab("✨ AI summary")}<p style="font-size:12.5px;line-height:1.55">${esc(a.summary || "—")}</p>
+          <div>${lab(`${Icon('sparkles', { size: 12 })} AI summary`)}<p style="font-size:12.5px;line-height:1.55">${esc(a.summary || "—")}</p>
             ${a.behavioral_assessment ? `<p style="font-size:11.5px;color:var(--muted);margin-top:8px"><b>Behavior:</b> ${esc(a.behavioral_assessment)}</p>` : ""}</div>
           <div>${lab("Key points")}<ul class="ai-list">${(a.key_points || []).map((p) => `<li>${esc(p)}</li>`).join("") || '<li class="muted">—</li>'}</ul></div>
           <div>${lab("Action items")}<ul class="ai-list todo">${(a.pending_actions || []).map((p) => `<li>${esc(p)}</li>`).join("") || '<li class="muted">—</li>'}</ul></div>
         </div>`
         : `<div class="card-pad" style="border-top:1px solid var(--line-2);display:flex;align-items:center;justify-content:space-between">
             <span class="muted small">No AI analysis yet.</span>
-            ${writable ? `<button class="btn btn-soft btn-sm" onclick="analyze(${c.id})">✨ Transcribe & analyze</button>` : ""}</div>`;
-      const projBadge = c.project_title ? `<span class="badge bg-secondary-subtle text-secondary-emphasis ms-2" style="font-size:10px">📂 ${esc(c.project_title)}</span>` : "";
+            ${writable ? `<button class="btn btn-soft btn-sm" onclick="analyze(${c.id})">${Icon('sparkles', { size: 14 })} Transcribe & analyze</button>` : ""}</div>`;
+      const projBadge = c.project_title ? `<span class="badge bg-secondary-subtle text-secondary-emphasis ms-2" style="font-size:10px">${Icon('folder', { size: 12 })} ${esc(c.project_title)}</span>` : "";
       return `<div class="card">
         <div class="call-row">
           <button class="play" onclick="toast('Open the client profile to play this recording','info')" title="${esc(c.filename)}">▶</button>
@@ -38,7 +38,7 @@
             <div style="font-size:11px;color:var(--muted-2)">${c.created_at ? fmtDate(c.created_at) : ""}</div></div>
           ${a ? sentPill(a.sentiment) : ""}
         </div>${body}</div>`;
-    }).join("") : '<div class="empty"><span class="em-ico">📞</span>No call recordings yet inside this folder. Upload one using the button above.</div>';
+    }).join("") : `<div class="empty"><span class="em-ico">${Icon('phone', { size: 24 })}</span>No call recordings yet inside this folder. Upload one using the button above.</div>`;
   }
 
   function render() {
@@ -63,7 +63,7 @@
         <div class="card p-3 d-flex flex-row align-items-center gap-3 folder-card ${isActive ? 'border-primary bg-primary-subtle' : ''}" 
              style="cursor:pointer; width:220px; flex-shrink:0; transition: all 0.12s; user-select:none" 
              onclick="window.selectFolder('${esc(cName)}')">
-          <span style="font-size:28px">📁</span>
+          <span style="font-size:28px">${Icon('folder', { size: 22 })}</span>
           <div style="min-width:0; flex-grow:1">
             <div class="fw-bold text-truncate" style="font-size:13.5px; color:var(--ink)">${esc(cName)}</div>
             <div class="text-muted" style="font-size:11px">${count} recording${count === 1 ? '' : 's'}</div>
@@ -77,7 +77,7 @@
       <div class="card p-3 d-flex flex-row align-items-center gap-3 folder-card ${allActive ? 'border-primary bg-primary-subtle' : ''}" 
            style="cursor:pointer; width:220px; flex-shrink:0; transition: all 0.12s; user-select:none" 
            onclick="window.selectFolder('all')">
-        <span style="font-size:28px">🗂️</span>
+        <span style="font-size:28px">${Icon('folderOpen', { size: 22 })}</span>
         <div style="min-width:0; flex-grow:1">
           <div class="fw-bold text-truncate" style="font-size:13.5px; color:var(--ink)">All Recordings</div>
           <div class="text-muted" style="font-size:11px">${calls.length} total</div>
