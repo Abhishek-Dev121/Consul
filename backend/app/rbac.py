@@ -39,6 +39,24 @@ def is_assigned_to_client(user: User, client: Client) -> bool:
     return any(a.id == user.id for a in client.assignees)
 
 
+def accessible_client_ids(db, user: User) -> set[int] | None:
+    """The set of client ids a user may access, fetched in a SINGLE query.
+
+    Returns None for admins+ (meaning "all clients" — no filtering needed) so
+    callers can skip per-row access checks entirely. For team_lead/employee it
+    returns just their assigned client ids. Replaces per-row `db.get(Client)`
+    loops that caused N+1 round-trips (crippling on a remote/cloud database).
+    """
+    if has_min_role(user, UserRole.admin):
+        return None
+    from sqlalchemy import select
+    from app.models.client import client_assignments
+
+    return set(db.execute(
+        select(client_assignments.c.client_id).where(client_assignments.c.user_id == user.id)
+    ).scalars().all())
+
+
 def ensure_client_access(user: User, client: Client) -> None:
     if not is_assigned_to_client(user, client):
         raise HTTPException(

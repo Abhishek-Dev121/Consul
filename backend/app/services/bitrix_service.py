@@ -125,8 +125,21 @@ def is_connected(db: Session) -> bool:
 
 # ----------------------------------------------------------------------- Sync logic (Group focus)
 
-def fetch_project_groups(db: Session) -> list[dict]:
-    """Fetch all workgroups from Bitrix24 (paginated up to a limit of 500)."""
+# Short-lived cache for the workgroup list. It changes rarely, but the call is a
+# ~2.5s paginated round-trip to Bitrix; without caching it runs on every
+# projects-page load and every client-create, dominating those requests.
+_GROUPS_CACHE: dict = {"data": None, "at": 0.0}
+_GROUPS_TTL = 300  # seconds
+
+
+def fetch_project_groups(db: Session, use_cache: bool = True) -> list[dict]:
+    """Fetch all workgroups from Bitrix24 (paginated up to a limit of 500).
+
+    Result is cached for `_GROUPS_TTL` seconds; pass use_cache=False to force a
+    fresh fetch (e.g. right before a full re-sync).
+    """
+    if use_cache and _GROUPS_CACHE["data"] is not None and (time.time() - _GROUPS_CACHE["at"]) < _GROUPS_TTL:
+        return _GROUPS_CACHE["data"]
     groups = []
     start = 0
     while True:
@@ -139,6 +152,8 @@ def fetch_project_groups(db: Session) -> list[dict]:
         if len(result) < 50 or len(groups) >= 500:
             break
         start += 50
+    _GROUPS_CACHE["data"] = groups
+    _GROUPS_CACHE["at"] = time.time()
     return groups
 
 

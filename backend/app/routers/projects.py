@@ -7,7 +7,7 @@ from app.deps import get_current_user
 from app.models.client import Client
 from app.models.project import Project
 from app.models.user import User
-from app.rbac import ensure_client_access
+from app.rbac import accessible_client_ids, ensure_client_access
 from app.schemas.project import ProjectOut
 
 router = APIRouter(prefix="/api/projects", tags=["projects"])
@@ -31,19 +31,15 @@ def list_projects(
     # Otherwise (global list), return all groups from Bitrix24
     stmt = select(Project).order_by(Project.created_at.desc())
     local_projects = db.execute(stmt).scalars().all()
-    
-    # Filter local projects by client accessibility
-    visible_local = []
-    for p in local_projects:
-        client = db.get(Client, p.client_id)
-        if not client:
-            continue
-        try:
-            ensure_client_access(user, client)
-            visible_local.append(p)
-        except HTTPException:
-            continue
-            
+
+    # Filter local projects by client accessibility using a single id set
+    # (no per-project db.get(Client) round-trip). Admins see all projects whose
+    # client still exists; others only their assigned clients.
+    allowed = accessible_client_ids(db, user)
+    if allowed is None:
+        allowed = set(db.execute(select(Client.id)).scalars().all())
+    visible_local = [p for p in local_projects if p.client_id in allowed]
+
     local_map = {p.bitrix_project_id: p for p in visible_local}
     
     try:
