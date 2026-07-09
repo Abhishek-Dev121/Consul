@@ -9,8 +9,8 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.deps import get_current_user
-from app.models.user import User
-from app.schemas.auth import ChangePassword, InviteAccept, InviteInfo, Token, UserOut
+from app.models.user import User, UserRole
+from app.schemas.auth import ChangePassword, InviteAccept, InviteInfo, Token, UserOut, UserCreate
 from app.services.auth_service import create_access_token, hash_password, verify_password
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
@@ -124,3 +124,25 @@ def accept_invite(payload: InviteAccept, db: Session = Depends(get_db)):
     user.last_login_at = datetime.now(timezone.utc)
     db.commit()
     return Token(access_token=create_access_token(user.id, {"role": user.role.value}))
+
+
+@router.post("/signup", response_model=UserOut, status_code=201)
+def signup(payload: UserCreate, db: Session = Depends(get_db)):
+    existing = db.execute(select(User).where(User.email == payload.email)).scalar_one_or_none()
+    if existing:
+        raise HTTPException(status_code=400, detail="Email already registered")
+    if not payload.password:
+        raise HTTPException(status_code=400, detail="Password is required")
+    if len(payload.password) < 8:
+        raise HTTPException(status_code=400, detail="Password must be at least 8 characters")
+    user = User(
+        name=payload.name,
+        email=payload.email,
+        password_hash=hash_password(payload.password),
+        role=UserRole.employee,  # Public signups default to employee
+        is_active=True
+    )
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+    return user

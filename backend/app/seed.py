@@ -9,6 +9,7 @@ from sqlalchemy import select, text
 from app.config import settings
 from app.database import Base, SessionLocal, engine
 from app.models.user import User, UserRole
+from app.models.chat import Chat, ChatMessage, MessageStatus
 from app.services.auth_service import hash_password
 
 # Columns added after the initial release. Each runs only if missing.
