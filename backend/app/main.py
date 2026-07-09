@@ -35,6 +35,31 @@ FRONTEND_DIR = Path(__file__).resolve().parents[2] / "frontend"
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
+    # Keep Neon connection warm — ping every 4 minutes so the DB doesn't cold-start.
+    import threading
+    from sqlalchemy import text
+    from app.database import SessionLocal
+
+    def _keep_alive():
+        import time
+        while True:
+            time.sleep(240)   # 4 minutes
+            try:
+                with SessionLocal() as db:
+                    db.execute(text("SELECT 1"))
+            except Exception:
+                pass  # silently ignore — server may be shutting down
+
+    # ── Warm-up: prime the connection pool immediately so the first user request
+    # ── doesn't pay the Neon cold-start penalty (can be 5-15 s on free tier).
+    try:
+        with SessionLocal() as _wdb:
+            _wdb.execute(text("SELECT 1"))
+    except Exception:
+        pass
+
+    t = threading.Thread(target=_keep_alive, daemon=True, name="neon-keepalive")
+    t.start()
     yield
 
 

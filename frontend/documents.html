@@ -13,7 +13,15 @@
     <aside class="sidebar" id="app-sidebar"></aside>
     <div class="main">
       <header class="topbar" id="app-topbar"></header>
-      <main class="content"><div id="view"><div class="muted">Loading…</div></div></main>
+      <main class="content">
+        <div id="view">
+          <div class="grid g-4" style="grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); padding: 8px;">
+            <div class="skeleton" style="height: 180px; border-radius: 12px;"></div>
+            <div class="skeleton" style="height: 180px; border-radius: 12px;"></div>
+            <div class="skeleton" style="height: 180px; border-radius: 12px;"></div>
+          </div>
+        </div>
+      </main>
     </div>
   </div>
   <!-- Upload document modal -->

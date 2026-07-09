@@ -53,10 +53,22 @@ function initials(name) {
   return (name || "?").split(/\s+/).map((w) => w[0]).slice(0, 2).join("").toUpperCase();
 }
 
-async function renderLayout(active, pageTitle, opts = {}) {
-  ensureFonts();
-  const user = await requireAuth();
+function getCachedUser() {
+  try {
+    const cached = localStorage.getItem("ch_user") || sessionStorage.getItem("ch_user");
+    return cached ? JSON.parse(cached) : null;
+  } catch (e) {
+    return null;
+  }
+}
 
+function cacheUser(user, remember = true) {
+  try {
+    (remember ? localStorage : sessionStorage).setItem("ch_user", JSON.stringify(user));
+  } catch (e) {}
+}
+
+function doRenderLayout(active, pageTitle, user, opts) {
   // Restore collapsed-sidebar preference (desktop).
   const shell = document.querySelector(".app-shell");
   if (shell && localStorage.getItem("ch_nav") === "collapsed") shell.classList.add("nav-collapsed");
@@ -64,69 +76,102 @@ async function renderLayout(active, pageTitle, opts = {}) {
   // ---- Sidebar ----
   const sections = NAV.map((sec) => {
     const links = sec.items
-      .filter((n) => ROLE_RANK[user.role] >= ROLE_RANK[n.min])
+      .filter((n) => user && ROLE_RANK[user.role] >= ROLE_RANK[n.min])
       .map((n) => `<a class="nav-link ${n.href === active ? "active" : ""}" href="${n.href}" title="${n.label}">
         <span class="ico">${n.icon}</span><span>${n.label}</span></a>`).join("");
     if (!links) return "";
     return `<div class="nav-section">${sec.section}</div>${links}`;
   }).join("");
 
-  document.getElementById("app-sidebar").innerHTML = `
-    <div class="brand">
-      <div class="logo">📨</div>
-      <div><h1>ClientHub</h1><div class="tag">Bitrix24 Local App</div></div>
-    </div>
-    <nav class="nav">${sections}</nav>
-    <div class="rail-foot">
-      <div class="role-card">
-        <div class="rc-top"><label>Signed in</label>
-          <button class="signout" style="width:auto;margin:0;padding:3px 8px;font-size:11px" onclick="openAccount()">My account</button></div>
-        <div class="me">
-          <span class="av">${initials(user.name)}</span>
-          <div><div class="nm">${esc(user.name)}</div><div class="rl">${user.role.replace("_", " ")}</div></div>
-        </div>
-        <button class="signout" onclick="logout()">Sign out</button>
+  const sidebarEl = document.getElementById("app-sidebar");
+  if (sidebarEl) {
+    sidebarEl.innerHTML = `
+      <div class="brand">
+        <div class="logo">📨</div>
+        <div><h1>ClientHub</h1><div class="tag">Bitrix24 Local App</div></div>
       </div>
-    </div>`;
+      <nav class="nav">${sections}</nav>
+      <div class="rail-foot">
+        <div class="role-card">
+          <div class="rc-top"><label>Signed in</label>
+            <button class="signout" style="width:auto;margin:0;padding:3px 8px;font-size:11px" onclick="openAccount()">My account</button></div>
+          <div class="me">
+            <span class="av">${initials(user ? user.name : "")}</span>
+            <div><div class="nm">${esc(user ? user.name : "")}</div><div class="rl">${user ? user.role.replace("_", " ") : ""}</div></div>
+          </div>
+          <button class="signout" onclick="logout()">Sign out</button>
+        </div>
+      </div>`;
+  }
 
   ensureAccountModal();
 
   // ---- Topbar ----
   const actions = opts.actions || "";
-  document.getElementById("app-topbar").innerHTML = `
-    <div class="d-flex align-items-center gap-2" style="min-width:0">
-      <button class="icon-btn tb-nav-toggle" id="nav-toggle" title="Collapse sidebar" aria-label="Collapse sidebar">☰</button>
-      <button class="icon-btn tb-hamburger" id="nav-hamburger" title="Menu" aria-label="Open menu">☰</button>
-      <div class="crumbs">
-        <span class="page-h">${esc(pageTitle || "")}</span>
-        ${opts.crumb ? `<span class="sub">${esc(opts.crumb)}</span>` : ""}
-      </div>
-    </div>
-    <div class="tb-right">
-      <div class="tb-search">
-        <span class="s-ico">🔍</span>
-        <input id="tb-search-input" placeholder="Search clients, chats…" autocomplete="off" />
-        <div class="tb-results d-none" id="tb-results"></div>
-      </div>
-      ${actions}
-      <button class="icon-btn" id="theme-toggle" title="Toggle light / dark">🌙</button>
-      <div class="dropdown">
-        <button class="icon-btn" id="tb-bell" data-bs-toggle="dropdown" title="Notifications">🔔</button>
-        <div class="dropdown-menu dropdown-menu-end p-0" style="width:320px" id="tb-notif"></div>
-      </div>
-      <div class="dropdown">
-        <button class="icon-btn" data-bs-toggle="dropdown" title="Help">❔</button>
-        <div class="dropdown-menu dropdown-menu-end p-3" style="width:260px">
-          <h6 class="mb-1" style="font-family:var(--display)">ClientHub</h6>
-          <p class="muted small mb-2">Bitrix24 Local App</p>
-          <div class="small">Use the sidebar to navigate, click a KPI to drill in, and manage your password under <b>My account</b>.</div>
-          <hr class="my-2"><div class="small muted">Support · info@devexhub.com</div>
+  const topbarEl = document.getElementById("app-topbar");
+  if (topbarEl) {
+    topbarEl.innerHTML = `
+      <div class="d-flex align-items-center gap-2" style="min-width:0">
+        <button class="icon-btn tb-nav-toggle" id="nav-toggle" title="Collapse sidebar" aria-label="Collapse sidebar">☰</button>
+        <button class="icon-btn tb-hamburger" id="nav-hamburger" title="Menu" aria-label="Open menu">☰</button>
+        <div class="crumbs">
+          <span class="page-h">${esc(pageTitle || "")}</span>
+          ${opts.crumb ? `<span class="sub">${esc(opts.crumb)}</span>` : ""}
         </div>
       </div>
-    </div>`;
+      <div class="tb-right">
+        <div class="tb-search">
+          <span class="s-ico">🔍</span>
+          <input id="tb-search-input" placeholder="Search clients, chats…" autocomplete="off" />
+          <div class="tb-results d-none" id="tb-results"></div>
+        </div>
+        ${actions}
+        <button class="icon-btn" id="theme-toggle" title="Toggle light / dark">🌙</button>
+        <div class="dropdown">
+          <button class="icon-btn" id="tb-bell" data-bs-toggle="dropdown" title="Notifications">🔔</button>
+          <div class="dropdown-menu dropdown-menu-end p-0" style="width:320px" id="tb-notif"></div>
+        </div>
+        <div class="dropdown">
+          <button class="icon-btn" data-bs-toggle="dropdown" title="Help">❔</button>
+          <div class="dropdown-menu dropdown-menu-end p-3" style="width:260px">
+            <h6 class="mb-1" style="font-family:var(--display)">ClientHub</h6>
+            <p class="muted small mb-2">Bitrix24 Local App</p>
+            <div class="small">Use the sidebar to navigate, click a KPI to drill in, and manage your password under <b>My account</b>.</div>
+            <hr class="my-2"><div class="small muted">Support · info@devexhub.com</div>
+          </div>
+        </div>
+      </div>`;
+  }
 
   wireTopbar();
   wireChrome();
+}
+
+async function renderLayout(active, pageTitle, opts = {}) {
+  ensureFonts();
+  
+  // 1. Try rendering immediately from cache to avoid flashing
+  const cachedUser = getCachedUser();
+  if (cachedUser) {
+    CURRENT_USER = cachedUser;
+    doRenderLayout(active, pageTitle, cachedUser, opts);
+  } else {
+    // If no cache, render a basic skeleton sidebar so we don't have empty layout shift
+    const sb = document.getElementById("app-sidebar");
+    if (sb) {
+      sb.innerHTML = `<div class="brand"><div class="logo">📨</div><div><h1>ClientHub</h1></div></div>
+        <div style="padding: 20px;"><div class="skeleton" style="height:30px;margin-bottom:15px;"></div><div class="skeleton" style="height:30px;margin-bottom:15px;"></div><div class="skeleton" style="height:30px;"></div></div>`;
+    }
+  }
+
+  // 2. Authenticate and get fresh user details
+  const user = await requireAuth();
+  cacheUser(user, !!localStorage.getItem("comm_agent_token"));
+
+  // 3. Re-render if the user details changed or if we didn't have cache
+  if (!cachedUser || cachedUser.name !== user.name || cachedUser.role !== user.role) {
+    doRenderLayout(active, pageTitle, user, opts);
+  }
 }
 
 // Theme, collapse, and mobile-nav controls.
@@ -218,7 +263,12 @@ function wireTopbar() {
   });
 }
 
-function logout() { Api.clearToken(); location.href = "/login"; }
+function logout() { 
+  Api.clearToken(); 
+  localStorage.removeItem("ch_user");
+  sessionStorage.removeItem("ch_user");
+  location.href = "/login"; 
+}
 
 // Styled confirmation dialog → Promise<boolean>. Replaces native confirm().
 function confirmDialog(message, opts = {}) {

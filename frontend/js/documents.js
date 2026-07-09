@@ -23,6 +23,8 @@
   const size = (b) => (b ? (b > 1e6 ? (b / 1e6).toFixed(1) + " MB" : (b / 1024).toFixed(0) + " KB") : "—");
 
   let docs = [], cat = "All", activeClientFolder = "all";
+  let page = 1;
+  const pageSize = 10;
 
   function render() {
     const cats = ["All", "Document", "Image", "Spreadsheet", "Presentation", "Link", "File"];
@@ -64,6 +66,79 @@
     const filteredDocs = activeClientFolder === "all" ? docs : docs.filter(d => d.client === activeClientFolder);
     const list = filteredDocs.filter((d) => cat === "All" || typeOf(d.filename, d.content_type, d.storage_key).cat === cat);
 
+    const totalPages = Math.ceil(list.length / pageSize) || 1;
+    if (page > totalPages) page = totalPages;
+    const paginated = list.slice((page - 1) * pageSize, page * pageSize);
+
+    let pagerHtml = "";
+    if (list.length > pageSize) {
+      pagerHtml = `
+        <div class="d-flex justify-content-between align-items-center mt-3 pt-3 border-top" style="width: 100%;">
+          <span class="muted small">Showing ${(page - 1) * pageSize + 1}-${Math.min(page * pageSize, list.length)} of ${list.length} documents</span>
+          <div class="btn-group">
+            <button class="btn btn-sm btn-soft" id="docs-prev" ${page <= 1 ? "disabled" : ""}>← Prev</button>
+            <button class="btn btn-sm btn-soft" id="docs-next" ${page >= totalPages ? "disabled" : ""}>Next →</button>
+          </div>
+        </div>`;
+    }
+
+    const cardsHtml = paginated.length ? paginated.map((d) => {
+      const ty = typeOf(d.filename, d.content_type, d.storage_key);
+      const clickAction = d.content_type === "url"
+        ? `window.open('${esc(d.storage_key)}','_blank')`
+        : `window.open('/api/files/${d.id}/download','_blank')`;
+      
+      let aiButton = "";
+      let analysisBox = "";
+      
+      if (d.analysis) {
+        aiButton = `<button class="btn btn-sm btn-info text-white ms-2" style="font-size:11px;padding:3px 8px" onclick="event.stopPropagation(); toggleAIAnalysis(${d.id})">✨ View AI</button>`;
+        
+        const a = d.analysis;
+        const keyPoints = (a.key_points || []).map(p => `<li>${esc(p)}</li>`).join("");
+        const actions = (a.pending_actions || []).map(p => `<li>${esc(p)}</li>`).join("");
+        const sentimentClass = a.sentiment === 'positive' ? 'success' : a.sentiment === 'negative' ? 'danger' : 'secondary';
+        
+        analysisBox = `
+          <div class="doc-analysis-box d-none mt-3 p-3 bg-light rounded border text-start" id="ai-box-${d.id}" onclick="event.stopPropagation();">
+            <div class="d-flex justify-content-between align-items-center mb-2">
+              <strong style="font-size:13px">✨ AI Analysis</strong>
+              <span class="badge bg-${sentimentClass}-subtle text-${sentimentClass}-emphasis" style="font-size:10px">${(a.sentiment || 'neutral').toUpperCase()}</span>
+            </div>
+            <p class="mb-2 text-muted" style="font-size:12.5px;line-height:1.4"><strong>Summary:</strong> ${esc(a.summary || "No summary available.")}</p>
+            <div class="row g-2">
+              <div class="col-sm-6">
+                <strong style="font-size:11.5px">Key Points:</strong>
+                <ul class="text-muted ps-3 mb-0" style="font-size:11.5px;max-height:100px;overflow-y:auto">${keyPoints || "<li>—</li>"}</ul>
+              </div>
+              <div class="col-sm-6">
+                <strong style="font-size:11.5px">Pending Actions:</strong>
+                <ul class="text-muted ps-3 mb-0" style="font-size:11.5px;max-height:100px;overflow-y:auto">${actions || "<li>—</li>"}</ul>
+              </div>
+            </div>
+          </div>
+        `;
+      } else if (writable) {
+        aiButton = `<button class="btn btn-sm btn-success ms-2" style="font-size:11px;padding:3px 8px" onclick="event.stopPropagation(); runDocumentAI(${d.id}, this)">🤖 Analyze</button>`;
+      }
+
+      return `<div class="doc-card" style="display:flex;flex-direction:column;cursor:pointer;height:auto;padding:16px;box-shadow:var(--sh-s)" onclick="${clickAction}">
+        <div style="display:flex;align-items:flex-start;gap:12px;width:100%">
+          <div class="doc-ic" style="background:${ty.c};flex-shrink:0;height:40px;width:40px;display:flex;align-items:center;justify-content:center;font-weight:bold;color:white;border-radius:4px">${ty.t}</div>
+          <div style="min-width:0;flex-grow:1">
+            <h4 style="margin:0 0 4px;font-size:14.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(d.filename)}</h4>
+            <div class="dm" style="font-size:12px;color:var(--muted-2)">${ty.cat} ${d.content_type === "url" ? "" : `· ${size(d.size)}`}</div>
+            <div class="dm" style="margin-top:2px;display:flex;align-items:center;gap:6px;font-size:11.5px;color:var(--muted-2)">
+              ${esc(d.client)} ${d.project_title ? `<span class="badge bg-secondary-subtle text-secondary-emphasis" style="font-size:9.5px;padding:2px 6px">📂 ${esc(d.project_title)}</span>` : ""}
+            </div>
+            <div class="dlink" style="font-size:11px;color:var(--muted-2);margin-top:4px">${esc(d.by)} · ${d.created_at ? fmtDate(d.created_at) : ""}</div>
+          </div>
+          <div style="flex-shrink:0">${aiButton}</div>
+        </div>
+        ${analysisBox}
+      </div>`;
+    }).join("") : '<div class="empty" style="grid-column:1/-1"><span class="em-ico">📄</span>No documents yet inside this folder. Upload one from a client profile or using the button above.</div>';
+
     document.getElementById("view").innerHTML = `
       <div class="page-head"><div><h2>Documents</h2>
         <p>Files linked to clients — contracts, requirements, images and project docs.</p></div></div>
@@ -83,68 +158,20 @@
         </div>
       </div>
 
-      <div class="grid g-4">${list.length ? list.map((d) => {
-        const ty = typeOf(d.filename, d.content_type, d.storage_key);
-        const clickAction = d.content_type === "url"
-          ? `window.open('${esc(d.storage_key)}','_blank')`
-          : `window.open('/api/files/${d.id}/download','_blank')`;
-        
-        let aiButton = "";
-        let analysisBox = "";
-        
-        if (d.analysis) {
-          aiButton = `<button class="btn btn-sm btn-info text-white ms-2" style="font-size:11px;padding:3px 8px" onclick="event.stopPropagation(); toggleAIAnalysis(${d.id})">✨ View AI</button>`;
-          
-          const a = d.analysis;
-          const keyPoints = (a.key_points || []).map(p => `<li>${esc(p)}</li>`).join("");
-          const actions = (a.pending_actions || []).map(p => `<li>${esc(p)}</li>`).join("");
-          const sentimentClass = a.sentiment === 'positive' ? 'success' : a.sentiment === 'negative' ? 'danger' : 'secondary';
-          
-          analysisBox = `
-            <div class="doc-analysis-box d-none mt-3 p-3 bg-light rounded border text-start" id="ai-box-${d.id}" onclick="event.stopPropagation();">
-              <div class="d-flex justify-content-between align-items-center mb-2">
-                <strong style="font-size:13px">✨ AI Analysis</strong>
-                <span class="badge bg-${sentimentClass}-subtle text-${sentimentClass}-emphasis" style="font-size:10px">${(a.sentiment || 'neutral').toUpperCase()}</span>
-              </div>
-              <p class="mb-2 text-muted" style="font-size:12.5px;line-height:1.4"><strong>Summary:</strong> ${esc(a.summary || "No summary available.")}</p>
-              <div class="row g-2">
-                <div class="col-sm-6">
-                  <strong style="font-size:11.5px">Key Points:</strong>
-                  <ul class="text-muted ps-3 mb-0" style="font-size:11.5px;max-height:100px;overflow-y:auto">${keyPoints || "<li>—</li>"}</ul>
-                </div>
-                <div class="col-sm-6">
-                  <strong style="font-size:11.5px">Pending Actions:</strong>
-                  <ul class="text-muted ps-3 mb-0" style="font-size:11.5px;max-height:100px;overflow-y:auto">${actions || "<li>—</li>"}</ul>
-                </div>
-              </div>
-            </div>
-          `;
-        } else if (writable) {
-          aiButton = `<button class="btn btn-sm btn-success ms-2" style="font-size:11px;padding:3px 8px" onclick="event.stopPropagation(); runDocumentAI(${d.id}, this)">🤖 Analyze</button>`;
-        }
-
-        return `<div class="doc-card" style="display:flex;flex-direction:column;cursor:pointer;height:auto;padding:16px;box-shadow:var(--sh-s)" onclick="${clickAction}">
-          <div style="display:flex;align-items:flex-start;gap:12px;width:100%">
-            <div class="doc-ic" style="background:${ty.c};flex-shrink:0;height:40px;width:40px;display:flex;align-items:center;justify-content:center;font-weight:bold;color:white;border-radius:4px">${ty.t}</div>
-            <div style="min-width:0;flex-grow:1">
-              <h4 style="margin:0 0 4px;font-size:14.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(d.filename)}</h4>
-              <div class="dm" style="font-size:12px;color:var(--muted-2)">${ty.cat} ${d.content_type === "url" ? "" : `· ${size(d.size)}`}</div>
-              <div class="dm" style="margin-top:2px;display:flex;align-items:center;gap:6px;font-size:11.5px;color:var(--muted-2)">
-                ${esc(d.client)} ${d.project_title ? `<span class="badge bg-secondary-subtle text-secondary-emphasis" style="font-size:9.5px;padding:2px 6px">📂 ${esc(d.project_title)}</span>` : ""}
-              </div>
-              <div class="dlink" style="font-size:11px;color:var(--muted-2);margin-top:4px">${esc(d.by)} · ${d.created_at ? fmtDate(d.created_at) : ""}</div>
-            </div>
-            <div style="flex-shrink:0">${aiButton}</div>
-          </div>
-          ${analysisBox}
-        </div>`;
-      }).join("") : '<div class="empty" style="grid-column:1/-1"><span class="em-ico">📄</span>No documents yet inside this folder. Upload one from a client profile or using the button above.</div>'}</div>`;
+      <div class="grid g-4" style="margin-bottom:16px">${cardsHtml}</div>
+      ${pagerHtml}`;
     
-    document.querySelectorAll("[data-c]").forEach((el) => el.addEventListener("click", () => { cat = el.dataset.c; render(); }));
+    document.querySelectorAll("[data-c]").forEach((el) => el.addEventListener("click", () => { cat = el.dataset.c; page = 1; render(); }));
+
+    const prevBtn = document.getElementById("docs-prev");
+    const nextBtn = document.getElementById("docs-next");
+    if (prevBtn) prevBtn.addEventListener("click", () => { page--; render(); });
+    if (nextBtn) nextBtn.addEventListener("click", () => { page++; render(); });
   }
 
   window.selectFolder = (folderName) => {
     activeClientFolder = folderName;
+    page = 1;
     render();
   };
 
