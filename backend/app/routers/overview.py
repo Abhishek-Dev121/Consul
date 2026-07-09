@@ -28,10 +28,14 @@ _DONE_TOKENS = {"done", "completed", "complete", "closed", "won", "5"}
 
 
 def _accessible_clients(db: Session, user: User) -> list[Client]:
-    clients = db.execute(select(Client).order_by(Client.name)).scalars().all()
     if has_min_role(user, UserRole.admin):
-        return clients
-    return [c for c in clients if any(a.id == user.id for a in c.assignees)]
+        return db.execute(select(Client).order_by(Client.name)).scalars().all()
+    return db.execute(
+        select(Client)
+        .join(Client.assignees)
+        .where(User.id == user.id)
+        .order_by(Client.name)
+    ).scalars().all()
 
 
 def _sentiment_by_client(db: Session, conv_to_client: dict[int, int]) -> dict[int, str]:
@@ -70,10 +74,19 @@ def dashboard_overview(db: Session = Depends(get_db), user: User = Depends(get_c
     if not cids:
         cids = [-1]
 
-    convos = db.execute(
-        select(Conversation).where(Conversation.client_id.in_(cids), Conversation.is_deleted.is_(False))
+    # Combine Conversation and Channel fetch in one join query
+    convos_with_channels = db.execute(
+        select(Conversation, Channel.platform)
+        .outerjoin(Channel, Conversation.channel_id == Channel.id)
+        .where(Conversation.client_id.in_(cids), Conversation.is_deleted.is_(False))
         .order_by(Conversation.created_at.desc())
-    ).scalars().all()
+    ).all()
+    convos = []
+    conv_platform = {}
+    for c, plat in convos_with_channels:
+        convos.append(c)
+        conv_platform[c.id] = plat
+
     conv_to_client = {c.id: c.client_id for c in convos}
     audio_count = db.execute(
         select(func.count(AudioRecording.id)).where(AudioRecording.client_id.in_(cids))
@@ -82,27 +95,30 @@ def dashboard_overview(db: Session = Depends(get_db), user: User = Depends(get_c
         select(Project).where(Project.client_id.in_(cids)).order_by(Project.created_at.desc())
     ).scalars().all()
 
-    sent_by_client = _sentiment_by_client(db, conv_to_client)
-    # Latest sentiment per conversation (for attention list + tally)
+    # Query AIAnalysis once instead of twice
     conv_sent_rows = db.execute(
         select(AIAnalysis.target_id, AIAnalysis.sentiment)
         .where(AIAnalysis.target_type == AnalysisTarget.conversation,
                AIAnalysis.target_id.in_(list(conv_to_client) or [-1]))
         .order_by(AIAnalysis.created_at.asc())
     ).all()
+    
     conv_sent = {}
+    sent_by_client = {}
     for cid_, s in conv_sent_rows:
-        conv_sent[cid_] = _norm_sent(s)
+        if s:
+            ns = _norm_sent(s)
+            conv_sent[cid_] = ns
+            sent_by_client[conv_to_client[cid_]] = s
 
     tally = {"pos": 0, "neu": 0, "neg": 0}
     for s in conv_sent.values():
         tally[s] += 1
 
-    # channel volume (conversations per platform)
-    chan_platform = dict(db.execute(select(Channel.id, Channel.platform)).all())
+    # channel volume (conversations per platform) using pre-joined platform data
     vol: dict[str, int] = {}
     for c in convos:
-        plat = chan_platform.get(c.channel_id)
+        plat = conv_platform.get(c.id)
         key = plat.value if plat else "other"
         vol[key] = vol.get(key, 0) + 1
 
@@ -110,10 +126,11 @@ def dashboard_overview(db: Session = Depends(get_db), user: User = Depends(get_c
     attention = []
     for c in convos:
         s = conv_sent.get(c.id, "neu")
+        plat = conv_platform.get(c.id)
         attention.append({
             "id": c.id, "client_id": c.client_id, "client": cname.get(c.client_id, "—"),
             "title": c.title or "Untitled",
-            "platform": (chan_platform.get(c.channel_id).value if chan_platform.get(c.channel_id) else "other"),
+            "platform": plat.value if plat else "other",
             "sentiment": s, "time": c.created_at.isoformat() if c.created_at else None,
         })
     # Only surface conversations that actually need attention: negative sentiment
@@ -124,34 +141,44 @@ def dashboard_overview(db: Session = Depends(get_db), user: User = Depends(get_c
 
     at_risk = len({cid_ for cid_, s in sent_by_client.items() if _norm_sent(s) == "neg"})
 
-    # recent activity
-    acts = db.execute(
-        select(Activity).order_by(Activity.created_at.desc()).limit(7)
-    ).scalars().all()
-    actor_names = dict(db.execute(select(User.id, User.name)).all())
+    # recent activity (joined with User to avoid querying all users)
+    acts_with_users = db.execute(
+        select(Activity, User.name)
+        .outerjoin(User, Activity.actor_id == User.id)
+        .order_by(Activity.created_at.desc())
+        .limit(7)
+    ).all()
     recent = [{
-        "actor": actor_names.get(a.actor_id, "System"),
+        "actor": name or "System",
         "action": a.action, "detail": a.detail,
         "client": cname.get(a.client_id) if a.client_id else None,
         "time": a.created_at.isoformat() if a.created_at else None,
-    } for a in acts]
+    } for a, name in acts_with_users]
 
-    # projects in flight
-    tasks_by_proj: dict[int, list] = {}
+    # projects in flight (using single grouped query instead of fetching all ProjectTasks)
+    task_counts = {}
     if project_rows:
-        for t in db.execute(
-            select(ProjectTask).where(ProjectTask.project_id.in_([p.id for p in project_rows]))
-        ).scalars().all():
-            tasks_by_proj.setdefault(t.project_id, []).append(t)
+        pids = [p.id for p in project_rows[:6]]
+        from sqlalchemy import case
+        task_stats = db.execute(
+            select(
+                ProjectTask.project_id,
+                func.count(ProjectTask.id).label("total"),
+                func.sum(case((func.lower(ProjectTask.status).in_(_DONE_TOKENS), 1), else_=0)).label("done")
+            )
+            .where(ProjectTask.project_id.in_(pids))
+            .group_by(ProjectTask.project_id)
+        ).all()
+        task_counts = {row.project_id: (row.total, row.done or 0) for row in task_stats}
+
     projects = []
     for p in project_rows[:6]:
-        tks = tasks_by_proj.get(p.id, [])
-        done = sum(1 for t in tks if (t.status or "").lower() in _DONE_TOKENS)
-        progress = round(done / len(tks) * 100) if tks else 0
+        total, done = task_counts.get(p.id, (0, 0))
+        progress = round(done / total * 100) if total else 0
         projects.append({
             "id": p.id, "bitrix_id": p.bitrix_project_id, "title": p.title,
             "client": cname.get(p.client_id, "—"), "status": p.status or "—",
-            "progress": progress, "tasks": f"{done} / {len(tks)}",
+            "progress": progress, "tasks": f"{done} / {total}",
             "due": p.due_date.isoformat() if p.due_date else None,
         })
 
@@ -253,6 +280,12 @@ def reports_overview(db: Session = Depends(get_db), user: User = Depends(get_cur
     ).all()
     conv_sent = {cid_: _norm_sent(s) for cid_, s in conv_sent_rows}
 
+    # Extract client sentiment from the already loaded conversation sentiments
+    client_sent = {}
+    for conv_id, sentiment in conv_sent_rows:
+        if sentiment:
+            client_sent[conv_to_client[conv_id]] = sentiment
+
     def _aware(dt):
         return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
 
@@ -281,13 +314,15 @@ def reports_overview(db: Session = Depends(get_db), user: User = Depends(get_cur
                 tally[conv_sent.get(cid_, "neu")] += 1
         weeks.append({"label": start.strftime("Wk %V"), **tally})
 
-    # team productivity (activity per actor)
+    # team productivity (activity per actor, joined with User)
     rows = db.execute(
-        select(Activity.actor_id, func.count(Activity.id)).where(Activity.actor_id.isnot(None))
-        .group_by(Activity.actor_id).order_by(func.count(Activity.id).desc()).limit(6)
+        select(User.name, func.count(Activity.id))
+        .join(User, Activity.actor_id == User.id)
+        .group_by(User.name)
+        .order_by(func.count(Activity.id).desc())
+        .limit(6)
     ).all()
-    uname = dict(db.execute(select(User.id, User.name)).all())
-    team = [{"name": uname.get(uid, "User"), "actions": n} for uid, n in rows]
+    team = [{"name": name, "actions": n} for name, n in rows]
 
     # client engagement
     chat_counts = dict(db.execute(
@@ -296,7 +331,7 @@ def reports_overview(db: Session = Depends(get_db), user: User = Depends(get_cur
     call_counts = dict(db.execute(
         select(AudioRecording.client_id, func.count(AudioRecording.id)).where(AudioRecording.client_id.in_(cids))
         .group_by(AudioRecording.client_id)).all())
-    client_sent = _sentiment_by_client(db, conv_to_client)
+    
     engagement = [{
         "client": cname.get(c.id, "—"), "company": c.company,
         "chats": chat_counts.get(c.id, 0), "calls": call_counts.get(c.id, 0),

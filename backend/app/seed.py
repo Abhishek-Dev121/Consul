@@ -45,9 +45,11 @@ _COLUMN_PATCHES = [
 
 
 def _apply_column_patches() -> None:
+    if not _COLUMN_PATCHES:
+        return
     with engine.begin() as conn:
-        for stmt in _COLUMN_PATCHES:
-            conn.execute(text(stmt))
+        # Join all alter statements with a semicolon to execute them in a single batch round-trip
+        conn.execute(text(";\n".join(_COLUMN_PATCHES)))
 
 
 def init_db() -> None:

@@ -26,8 +26,7 @@ class Settings(BaseSettings):
     secret_key: str = "change-me-in-production"
     access_token_expire_minutes: int = 60 * 12
 
-    # --- Database / cache ---
-    database_url: str = "postgresql+psycopg2://postgres:postgres@localhost:5432/comm_agent"
+    database_url: str = "postgresql+psycopg2://neondb_owner:npg_xL3dj5gmAnsI@ep-super-heart-at950jsl.c-9.us-east-1.aws.neon.tech/neondb?sslmode=require"
     redis_url: str = "redis://localhost:6379/0"
 
     # --- Initial super admin (seeded on first run) ---
