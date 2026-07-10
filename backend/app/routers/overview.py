@@ -207,7 +207,25 @@ def dashboard_overview(db: Session = Depends(get_db), user: User = Depends(get_c
             "due": p.due_date.isoformat() if p.due_date else None,
         })
 
-    return {
+    # Drill-down for the sentiment panel. Built from `conv_sent`, the same map the
+    # tally is counted from, so each bucket matches its headline number exactly.
+    # No extra queries: every value here is already in memory.
+    sentiment_conversations: dict[str, list[dict]] = {"pos": [], "neu": [], "neg": []}
+    for c in convos:
+        s = conv_sent.get(c.id)
+        if s is None:
+            continue  # never analyzed -> not counted in the tally either
+        plat = conv_platform.get(c.id)
+        sentiment_conversations[s].append({
+            "id": c.id,
+            "client_id": c.client_id,
+            "client": cname.get(c.client_id, "—"),
+            "title": c.title or "Untitled",
+            "platform": plat.value if plat else "other",
+            "time": c.created_at.isoformat() if c.created_at else None,
+        })
+
+    result = {
         "kpis": {
             "clients": len(clients),
             "conversations": len(convos),
@@ -216,6 +234,7 @@ def dashboard_overview(db: Session = Depends(get_db), user: User = Depends(get_c
             "at_risk": at_risk,
         },
         "sentiment": tally,
+        "sentiment_conversations": sentiment_conversations,
         "channel_volume": [{"platform": k, "count": v} for k, v in sorted(vol.items(), key=lambda x: -x[1])],
         "attention": attention,
         "recent_activity": recent,
@@ -393,6 +412,7 @@ def reports_overview(db: Session = Depends(get_db), user: User = Depends(get_cur
 
 @router.get("/overview/documents")
 def documents_overview(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+
     cache_key = f"documents:{user.id}"
     cached = ttl_cache.get(cache_key)
     if cached is not None:
@@ -423,7 +443,7 @@ def documents_overview(db: Session = Depends(get_db), user: User = Depends(get_c
         "pending_actions": a.pending_actions, "follow_ups": a.follow_ups,
         "sentiment": a.sentiment, "sentiment_score": a.sentiment_score, "model": a.model,
     } for a in analyses}
-    
+
     result = [{
         "id": f.id, "filename": f.filename, "content_type": f.content_type, "size": f.size,
         "client": cname.get(f.client_id, "—"), "client_id": f.client_id,
@@ -438,6 +458,7 @@ def documents_overview(db: Session = Depends(get_db), user: User = Depends(get_c
 
 @router.get("/overview/calls")
 def calls_overview(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+
     cache_key = f"calls:{user.id}"
     cached = ttl_cache.get(cache_key)
     if cached is not None:

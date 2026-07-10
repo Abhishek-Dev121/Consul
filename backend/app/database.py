@@ -1,10 +1,15 @@
 """SQLAlchemy engine, session factory, and declarative Base."""
 from collections.abc import Generator
 
-from sqlalchemy import create_engine
+from sqlalchemy import JSON, create_engine
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, sessionmaker
 
 from app.config import settings
+
+# Postgres gets real JSONB; SQLite (tests) falls back to plain JSON, which it can
+# actually render. Without the variant, create_all() blows up under SQLite.
+JSONColumn = JSONB().with_variant(JSON(), "sqlite")
 
 engine = create_engine(
     settings.database_url,

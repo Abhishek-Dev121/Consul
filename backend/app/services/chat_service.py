@@ -4,7 +4,7 @@ A conversation's `raw_content` is a pasted chat log. We parse each line into a
 message (speaker + text + optional timestamp). Backfill is idempotent: a
 conversation is only exploded once (we skip it if it already has messages).
 """
-from datetime import datetime
+from datetime import datetime, timezone
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -58,6 +58,12 @@ def parse_log_to_messages(raw: str, client_name: str | None, fallback_dt: dateti
     return out
 
 
+def _aware(dt: datetime) -> datetime:
+    """SQLite hands back naive datetimes; Postgres returns aware ones. Normalise
+    before comparing so the clear-chat cutoff works on both."""
+    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
+
 def backfill_client_messages(db: Session, client: Client) -> None:
     """Ensure every conversation of the client has been exploded into messages."""
     conversations = db.execute(
@@ -73,8 +79,14 @@ def backfill_client_messages(db: Session, client: Client) -> None:
         .group_by(Message.conversation_id)
     ).scalars().all())
 
+    cleared_at = client.chat_cleared_at
     for conv in conversations:
         if conv.id in existing_msg_conv_ids:
+            continue
+        # A cleared chat has zero messages, which would otherwise look like a
+        # never-backfilled conversation and get re-exploded on the next read.
+        # Skip logs that predate the clear; newer uploads still backfill normally.
+        if cleared_at is not None and _aware(conv.created_at) <= _aware(cleared_at):
             continue
         fallback = conv.occurred_at or conv.created_at
         for msg in parse_log_to_messages(conv.raw_content, client.name, fallback):

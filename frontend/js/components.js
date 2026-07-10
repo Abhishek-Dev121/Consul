@@ -44,6 +44,10 @@ const ICONS = {
   logout: '<path d="M9 21H6a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3"/><path d="M16 17l5-5-5-5"/><path d="M21 12H9"/>',
   chevronDown: '<path d="M6 9l6 6 6-6"/>',
   restore: '<path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/>',
+  info: '<circle cx="12" cy="12" r="9"/><path d="M12 16v-4.5"/><path d="M12 8h.01"/>',
+  alert: '<path d="M10.3 3.9 1.9 18a2 2 0 0 0 1.7 3h16.8a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"/><path d="M12 9v4"/><path d="M12 17h.01"/>',
+  eraser: '<path d="M8.5 20H21"/><path d="m14.5 4.5 5 5a2 2 0 0 1 0 2.8l-7.6 7.6a2 2 0 0 1-2.8 0l-5-5a2 2 0 0 1 0-2.8l7.6-7.6a2 2 0 0 1 2.8 0Z"/><path d="m8 8 8 8"/>',
+  dots: '<circle cx="12" cy="5" r="1.4" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.4" fill="currentColor" stroke="none"/><circle cx="12" cy="19" r="1.4" fill="currentColor" stroke="none"/>',
   // Consul brand monogram — a bold "C" ring.
   consul: '<path d="M17 7a6.6 6.6 0 1 0 0 10" stroke-width="2.6"/>',
 };
@@ -76,7 +80,7 @@ const platformName = (p) => ({ whatsapp: "WhatsApp", upwork: "Upwork", slack: "S
   email: "Email", telegram: "Telegram", other: "Other" }[p] || "Other");
 
 // Avatar box (colored by string hash) — matches reference .av
-const AV_PALETTE = ["#0E8C8C", "#5B6CE0", "#C2702A", "#9D4ED2", "#1F9D6B", "#D2473D", "#3A8DDE", "#B0467E"];
+const AV_PALETTE = ["#2E6BFF", "#5B6CE0", "#C2702A", "#9D4ED2", "#1F9D6B", "#D2473D", "#3A8DDE", "#B0467E"];
 function avHash(s) { let h = 0; for (const ch of (s || "")) h = (h * 31 + ch.charCodeAt(0)) % AV_PALETTE.length; return AV_PALETTE[h]; }
 function initialsOf(n) { return (n || "?").split(/\s+/).slice(0, 2).map((w) => w[0]).join("").toUpperCase(); }
 function avBox(name, cls = "") { return `<span class="av ${cls}" style="background:${avHash(name)}">${initialsOf(name)}</span>`; }
@@ -119,12 +123,58 @@ function humanizeActivity(action, detail) {
     case "conversation.analyzed": return "ran AI analysis on a chat";
     case "audio.uploaded": return "uploaded a call recording";
     case "audio.analyzed": return "analyzed a call recording";
+    case "document.analyzed": return `ran AI analysis on${obj(detail.filename) || " a document"}`;
     case "message.sent": return "sent a reply";
     case "file.uploaded": return `uploaded${obj(detail.filename) || " a document"}`;
     case "bitrix.synced": return "synced Bitrix24 projects";
+    case "chat.cleared": {
+      const n = detail.messages;
+      return n ? `cleared the chat (${n} message${n === 1 ? "" : "s"})` : "cleared the chat";
+    }
+    case "chat.cleared_all": {
+      const c = detail.clients, m = detail.messages;
+      return (c != null && m != null)
+        ? `cleared every chat (${m} message${m === 1 ? "" : "s"} across ${c} client${c === 1 ? "" : "s"})`
+        : "cleared every chat";
+    }
   }
   if (action.startsWith("user.bulk_")) return `ran a bulk ${action.split("_")[1]} on users`;
   return action.replace(/[._]/g, " ");
+}
+
+// Icon + tone for an activity entry. Destructive actions read red, AI reads
+// purple, uploads/creations read green — so the feed is scannable at a glance.
+const ACTIVITY_META = {
+  "message.sent":          { icon: "message",    tone: "" },
+  "file.uploaded":         { icon: "file",       tone: "good" },
+  "audio.uploaded":        { icon: "phone",      tone: "good" },
+  "audio.analyzed":        { icon: "sparkles",   tone: "ai" },
+  "document.analyzed":     { icon: "sparkles",   tone: "ai" },
+  "conversation.analyzed": { icon: "sparkles",   tone: "ai" },
+  "conversation.created":  { icon: "message",    tone: "" },
+  "client.created":        { icon: "users",      tone: "good" },
+  "client.updated":        { icon: "edit",       tone: "" },
+  "channel.created":       { icon: "rss",        tone: "good" },
+  "user.created":          { icon: "users",      tone: "good" },
+  "user.updated":          { icon: "edit",       tone: "" },
+  "user.deleted":          { icon: "trash",      tone: "bad" },
+  "bitrix.synced":         { icon: "link",       tone: "" },
+  "chat.cleared":          { icon: "eraser",     tone: "warn" },
+  "chat.cleared_all":      { icon: "alert",      tone: "bad" },
+};
+function activityMeta(action) {
+  return ACTIVITY_META[action] || { icon: "clock", tone: "" };
+}
+
+// Project status -> pill class. Bitrix reports "active"/"closed"; the rest are
+// defensive so an unexpected value still renders as a neutral pill.
+function statusPill(status) {
+  const s = (status || "").toLowerCase();
+  let cls = "st-done";
+  if (s.includes("active") || s.includes("open")) cls = "st-active";
+  else if (s.includes("progress")) cls = "st-progress";
+  else if (s.includes("hold") || s.includes("pause")) cls = "st-hold";
+  return `<span class="st ${cls}"><span class="sd"></span>${esc(status || "unknown")}</span>`;
 }
 
 

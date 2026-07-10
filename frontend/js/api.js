@@ -33,9 +33,11 @@ const _apiCache = {
     try { sessionStorage.setItem(this._key(path), JSON.stringify({ ts: Date.now(), data })); } catch { /* quota full */ }
   },
   del(path) { try { sessionStorage.removeItem(this._key(path)); } catch {} },
-  clear() {
+  // Drop every cached GET whose path starts with `prefix` (all of them if omitted).
+  clear(prefix = "") {
+    const head = this._key(prefix);
     try {
-      Object.keys(sessionStorage).filter(k => k.startsWith("apicache:")).forEach(k => sessionStorage.removeItem(k));
+      Object.keys(sessionStorage).filter((k) => k.startsWith(head)).forEach((k) => sessionStorage.removeItem(k));
     } catch {}
   },
 };
@@ -140,6 +142,10 @@ const Api = {
   async post(p, b) { const r = await this.request("POST", p, b); _apiCache.del(p); return r; },
   async patch(p, b) { const r = await this.request("PATCH", p, b); _apiCache.del(p); return r; },
   async del(p) { const r = await this.request("DELETE", p); _apiCache.del(p); return r; },
+
+  // Drop cached GETs after a mutation that invalidates paths other than its own
+  // (e.g. clearing every chat invalidates every client's message list).
+  invalidateCache(prefix = "") { _apiCache.clear(prefix); },
 
   async postForm(p, formData) {
     return this.request("POST", p, formData, true);

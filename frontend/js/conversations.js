@@ -13,6 +13,7 @@
   let clients = [], channels = [], active = null, chanFilter = "all", searchQ = "", view = "active";
   const preselect = parseInt(qs("client")) || null;
   const canPurge = isAdmin();
+  const canClearAll = isSuperAdmin();
 
   const platOf = (cl) => (cl.channels && cl.channels[0] && cl.channels[0].platform) || "other";
   const _ns = (s) => (!s ? "neu" : s.toLowerCase().includes("pos") ? "pos" : s.toLowerCase().includes("neg") ? "neg" : "neu");
@@ -39,6 +40,7 @@
   function closeThread() {
     active = null;
     stopPresence();
+    closeContactPanel();
     document.getElementById("empty-center").style.display = "flex";
     document.getElementById("thread-wrap").style.display = "none";
     document.getElementById("ai-scroll").innerHTML = `<div class="ai2-empty">
@@ -253,26 +255,33 @@
     const cl = clients.find((x) => x.id === active);
     const plat = platOf(cl);
 
-    // Header
+    // Header — the identity block is a button: clicking it opens Contact info,
+    // the way tapping the name does in WhatsApp.
+    const detail = [cl.company, cl.email, cl.phone].filter(Boolean).map(esc).join(" · ");
     document.getElementById("th2-head").innerHTML = `
-      <span class="av2" style="background:${avHash(cl.name)};width:38px;height:38px;font-size:13px;border-radius:50%;display:grid;place-items:center;color:#fff;font-weight:700;flex-shrink:0">
-        ${initialsOf(cl.name)}
-      </span>
-      <div>
-        <div class="name">${esc(cl.name)}</div>
-        <div class="meta">
-          <span class="ch-pill" style="background:${chanColor(plat)}18;color:${chanColor(plat)}">
-            <span class="cd" style="background:${chanColor(plat)}"></span>${platformName(plat)}
+      <button class="th2-id" id="open-contact" title="Contact info">
+        <span class="av2" style="background:${avHash(cl.name)};width:38px;height:38px;font-size:13px;border-radius:50%;display:grid;place-items:center;color:#fff;font-weight:700;flex-shrink:0">
+          ${initialsOf(cl.name)}
+        </span>
+        <span class="th2-id-txt">
+          <span class="name">${esc(cl.name)}</span>
+          <span class="meta">
+            <span class="ch-pill" style="background:${chanColor(plat)}18;color:${chanColor(plat)}">
+              <span class="cd" style="background:${chanColor(plat)}"></span>${platformName(plat)}
+            </span>
+            ${detail ? `<span class="th2-detail">${detail}</span>` : ""}
+            <span class="online-pill" id="online-pill" style="display:none"><span class="odot"></span><span id="online-txt"></span></span>
           </span>
-          ${cl.company ? `<span style="color:var(--muted-2)">· ${esc(cl.company)}</span>` : ""}
-          <span class="online-pill" id="online-pill" style="display:none"><span class="odot"></span><span id="online-txt"></span></span>
-        </div>
-      </div>
+        </span>
+      </button>
       <div class="th2-acts">
         <a class="icon-btn" href="/client?id=${cl.id}" title="Full profile">
           <svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 3.6-7 8-7s8 3 8 7"/></svg>
         </a>
+        <button class="icon-btn" id="chat-menu-btn" title="Chat options" aria-haspopup="true">${Icon("dots", { size: 16 })}</button>
       </div>`;
+    document.getElementById("open-contact").onclick = () => openContactPanel(cl.id);
+    document.getElementById("chat-menu-btn").onclick = (e) => { e.stopPropagation(); openChatMenu(e.currentTarget, cl); };
 
     // Composer — archived conversations are read-only, no composer at all.
     if (view === "archived") {
@@ -703,6 +712,231 @@
     } catch (e) { toast(e.message); }
   }
 
+  // ─── Chat options menu (header kebab) ───
+  function closeChatMenu() { const m = document.getElementById("chat-menu"); if (m) m.remove(); }
+  document.addEventListener("click", closeChatMenu);
+
+  function openChatMenu(btn, cl) {
+    const open = document.getElementById("chat-menu");
+    closeChatMenu();
+    if (open) return;  // toggle off
+    const menu = document.createElement("div");
+    menu.className = "msg-menu chat-menu"; menu.id = "chat-menu";
+    menu.innerHTML =
+      `<button data-a="contact">${Icon("users", { size: 14 })} Contact info</button>` +
+      (writable && view !== "archived"
+        ? `<button data-a="clear" class="danger">${Icon("eraser", { size: 14 })} Clear chat</button>` +
+          `<button data-a="archive">${Icon("archive", { size: 14 })} Archive chat</button>`
+        : "") +
+      (canClearAll
+        ? `<div class="menu-sep"></div><button data-a="clearall" class="danger">${Icon("alert", { size: 14 })} Clear all chats</button>`
+        : "");
+    menu.addEventListener("click", (ev) => ev.stopPropagation());
+    document.body.appendChild(menu);
+    const r = btn.getBoundingClientRect();
+    menu.style.top = `${r.bottom + 6}px`;
+    menu.style.left = `${Math.max(8, Math.min(r.right - menu.offsetWidth, window.innerWidth - menu.offsetWidth - 10))}px`;
+    const on = (a, fn) => { const b = menu.querySelector(`[data-a="${a}"]`); if (b) b.onclick = () => { closeChatMenu(); fn(); }; };
+    on("contact", () => openContactPanel(cl.id));
+    on("clear", () => clearChat(cl.id));
+    on("archive", () => archiveClient(cl.id));
+    on("clearall", clearAllChats);
+  }
+
+  // ─── Clear chat / Clear all chats ───
+  async function clearChat(id) {
+    const cl = clients.find((c) => c.id === id);
+    const ok = await confirmDialog(
+      `Every message in ${cl ? cl.name + "'s" : "this"} conversation will be removed for you and for the whole team.`,
+      {
+        title: "Clear this chat?",
+        confirmText: "Clear chat",
+        icon: "eraser",
+        consequences: [
+          "All messages in this thread are permanently deleted.",
+          "Shared files stay available under Documents and Call Recordings.",
+          "The client, project and AI analysis are not affected.",
+        ],
+      }
+    );
+    if (!ok) return;
+    try {
+      const res = await Api.del(`/api/clients/${id}/messages`);
+      Api.invalidateCache(`/api/clients/${id}/`);
+      if (active === id) await renderThread();
+      const n = res && res.messages_deleted;
+      toast(n ? `Chat cleared — ${n} message${n === 1 ? "" : "s"} removed` : "Chat cleared", "success");
+    } catch (e) { toast(e.message); }
+  }
+
+  async function clearAllChats() {
+    const ok = await confirmDialog(
+      "This wipes the message history of every conversation in Consul, for every user. There is no undo and no backup.",
+      {
+        title: "Clear all chats?",
+        confirmText: "Clear all chats",
+        icon: "alert",
+        confirmPhrase: "CLEAR ALL",
+        note: "Only a Super Admin can perform this action.",
+        consequences: [
+          "Every message in every client conversation is permanently deleted.",
+          "Shared files stay available under Documents and Call Recordings.",
+          "Clients, projects and archived conversations are not deleted.",
+        ],
+      }
+    );
+    if (!ok) return;
+    try {
+      const res = await Api.del("/api/clients/messages/all");
+      Api.invalidateCache("/api/clients/");  // every client's message list is now stale
+      if (active) await renderThread();
+      toast(`All chats cleared — ${res.messages_deleted} message${res.messages_deleted === 1 ? "" : "s"} removed across ${res.clients} client${res.clients === 1 ? "" : "s"}`, "success");
+    } catch (e) { toast(e.message); }
+  }
+
+  // ─── Contact info panel (WhatsApp-style) ───
+  const _isImgName = (n) => [".png", ".jpg", ".jpeg", ".gif", ".webp"].some((e) => (n || "").toLowerCase().endsWith(e));
+  const _isVidName = (n) => [".mp4", ".mov", ".m4v", ".webm", ".avi", ".mkv"].some((e) => (n || "").toLowerCase().endsWith(e));
+  const _isAudioName = (n) => [".mp3", ".wav", ".m4a", ".ogg", ".oga", ".aac", ".flac"].some((e) => (n || "").toLowerCase().endsWith(e));
+  const _withToken = (u) => { const t = Api.token(); return t ? u + (u.includes("?") ? "&" : "?") + "token=" + encodeURIComponent(t) : u; };
+
+  function closeContactPanel() {
+    const p = document.getElementById("contact-panel");
+    if (p) p.classList.remove("show");
+    const s = document.getElementById("contact-scrim");
+    if (s) s.classList.remove("show");
+  }
+
+  async function openContactPanel(id) {
+    const cl = clients.find((c) => c.id === id);
+    if (!cl) return;
+    const plat = platOf(cl);
+
+    let scrim = document.getElementById("contact-scrim");
+    if (!scrim) {
+      scrim = document.createElement("div");
+      scrim.id = "contact-scrim";
+      document.body.appendChild(scrim);
+      scrim.addEventListener("click", closeContactPanel);
+    }
+    let panel = document.getElementById("contact-panel");
+    if (!panel) {
+      panel = document.createElement("aside");
+      panel.id = "contact-panel";
+      document.getElementById("conv-center").appendChild(panel);
+      document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeContactPanel(); });
+    }
+
+    const rows = [
+      ["Company", cl.company],
+      ["Email", cl.email],
+      ["Phone", cl.phone],
+    ].filter(([, v]) => v);
+
+    panel.innerHTML = `
+      <header class="cp-head">
+        <button class="cp-close" title="Close" aria-label="Close">${Icon("x", { size: 18 })}</button>
+        <span>Contact info</span>
+      </header>
+      <div class="cp-scroll">
+        <div class="cp-hero">
+          <span class="cp-av" style="background:${avHash(cl.name)}">${initialsOf(cl.name)}</span>
+          <h3>${esc(cl.name)}</h3>
+          <div class="cp-chips">
+            <span class="ch-pill" style="background:${chanColor(plat)}18;color:${chanColor(plat)}">
+              <span class="cd" style="background:${chanColor(plat)}"></span>${platformName(plat)}
+            </span>
+            ${sentPill(cl.sentiment)}
+          </div>
+        </div>
+        ${rows.length ? `<div class="cp-block">${rows.map(([k, v]) =>
+          `<div class="cp-row"><span class="cp-k">${k}</span><span class="cp-v">${esc(v)}</span></div>`
+        ).join("")}</div>` : ""}
+        <div class="cp-block" id="cp-media">
+          <div class="cp-block-head"><h6>Media, links and docs</h6><span class="cp-count" id="cp-media-count"></span></div>
+          <div class="cp-media-body"><div class="cp-loading">Loading…</div></div>
+        </div>
+        <div class="cp-block cp-actions">
+          <a class="cp-act" href="/client?id=${cl.id}">${Icon("users", { size: 15 })} Open full profile</a>
+          ${writable && view !== "archived" ? `
+            <button class="cp-act danger" id="cp-clear">${Icon("eraser", { size: 15 })} Clear chat</button>
+            <button class="cp-act" id="cp-archive">${Icon("archive", { size: 15 })} Archive chat</button>` : ""}
+        </div>
+      </div>`;
+
+    panel.querySelector(".cp-close").onclick = closeContactPanel;
+    const cpClear = panel.querySelector("#cp-clear");
+    if (cpClear) cpClear.onclick = () => { closeContactPanel(); clearChat(cl.id); };
+    const cpArch = panel.querySelector("#cp-archive");
+    if (cpArch) cpArch.onclick = () => { closeContactPanel(); archiveClient(cl.id); };
+
+    panel.classList.add("show");
+    scrim.classList.add("show");
+    loadContactMedia(cl.id, panel);
+  }
+
+  async function loadContactMedia(id, panel) {
+    const body = panel.querySelector(".cp-media-body");
+    const countEl = panel.querySelector("#cp-media-count");
+    let files = [], audios = [];
+    try {
+      [files, audios] = await Promise.all([
+        Api.get(`/api/files?client_id=${id}`).catch(() => []),
+        Api.get(`/api/audio?client_id=${id}`).catch(() => []),
+      ]);
+    } catch (_) { /* fall through to empty state */ }
+
+    const visual = [], sound = [], docs = [];
+    files.forEach((f) => {
+      if (f.content_type === "url") { docs.push({ name: f.filename, href: f.storage_key, isLink: true }); return; }
+      const url = _withToken(`/api/files/${f.id}/download`);
+      if ((f.content_type || "").startsWith("image/") || _isImgName(f.filename)) visual.push({ name: f.filename, url, kind: "img" });
+      else if ((f.content_type || "").startsWith("video/") || _isVidName(f.filename)) visual.push({ name: f.filename, url, kind: "vid" });
+      else docs.push({ name: f.filename, href: url });
+    });
+    // Older uploads were routed into audio_recordings by MIME sniffing, so an
+    // image or PDF can live there. Trust the extension before the table.
+    audios.forEach((a) => {
+      const url = _withToken(`/api/audio/${a.id}/download`);
+      if (_isVidName(a.filename) || (a.content_type || "").startsWith("video/")) visual.push({ name: a.filename, url, kind: "vid" });
+      else if (_isImgName(a.filename) || (a.content_type || "").startsWith("image/")) visual.push({ name: a.filename, url, kind: "img" });
+      else if ((a.content_type || "").startsWith("audio/") || _isAudioName(a.filename)) sound.push({ name: a.filename, url });
+      else docs.push({ name: a.filename, href: url });
+    });
+
+    const total = visual.length + sound.length + docs.length;
+    countEl.textContent = total ? `${total}` : "";
+    if (!total) {
+      body.innerHTML = `<div class="cp-empty">${Icon("folderOpen", { size: 22 })}<span>Nothing shared in this conversation yet.</span></div>`;
+      return;
+    }
+
+    let html = "";
+    if (visual.length) {
+      html += `<div class="cp-grid">${visual.slice(0, 9).map((m) => m.kind === "img"
+        ? `<button class="cp-cell" data-img="${esc(m.url)}" title="${esc(m.name)}"><img loading="lazy" src="${esc(m.url)}" alt="" /></button>`
+        : `<button class="cp-cell vid" data-vid="${esc(m.url)}" title="${esc(m.name)}"><video preload="metadata" src="${esc(m.url)}#t=0.1"></video><span class="cp-play">${Icon("send", { size: 14 })}</span></button>`
+      ).join("")}</div>`;
+      if (visual.length > 9) html += `<div class="cp-more">+${visual.length - 9} more</div>`;
+    }
+    if (sound.length) {
+      html += `<div class="cp-sub">Audio</div>` + sound.slice(0, 5).map((m) =>
+        `<div class="cp-file"><span class="cp-fic">${Icon("phone", { size: 13 })}</span><span class="cp-fn">${esc(m.name)}</span></div>`
+      ).join("");
+    }
+    if (docs.length) {
+      html += `<div class="cp-sub">Documents &amp; links</div>` + docs.slice(0, 6).map((d) =>
+        `<a class="cp-file" href="${esc(d.href)}" target="_blank" rel="noopener">
+          <span class="cp-fic">${Icon(d.isLink ? "link" : "file", { size: 13 })}</span>
+          <span class="cp-fn">${esc(d.name)}</span>
+        </a>`
+      ).join("");
+    }
+    body.innerHTML = html;
+    body.querySelectorAll("[data-img]").forEach((b) => b.onclick = () => openLightbox(b.dataset.img));
+    body.querySelectorAll("[data-vid]").forEach((b) => b.onclick = () => window.open(b.dataset.vid, "_blank", "noopener"));
+  }
+
   // ─── Right panel: AI ───
   let aiPanelOpen = true;
 
@@ -794,6 +1028,7 @@
 
   function selectClient(id) {
     active = id;
+    closeContactPanel();  // the panel belongs to the previous thread
     pendingAttachments = [];
     replyingTo = null;  // reply context is per-thread
     if (selectMode) exitSelectMode();

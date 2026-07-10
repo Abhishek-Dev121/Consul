@@ -9,7 +9,6 @@ from sqlalchemy import select, text
 from app.config import settings
 from app.database import Base, SessionLocal, engine
 from app.models.user import User, UserRole
-from app.models.chat import Chat, ChatMessage, MessageStatus
 from app.services.auth_service import hash_password
 
 # Columns added after the initial release. Each runs only if missing.
@@ -45,6 +44,7 @@ _COLUMN_PATCHES = [
     "ALTER TABLE messages ADD COLUMN IF NOT EXISTS edited_at TIMESTAMPTZ",
     "ALTER TABLE messages ADD COLUMN IF NOT EXISTS is_deleted BOOLEAN NOT NULL DEFAULT FALSE",
     "ALTER TABLE messages ADD COLUMN IF NOT EXISTS reply_to_id INTEGER REFERENCES messages(id) ON DELETE SET NULL",
+    "ALTER TABLE clients ADD COLUMN IF NOT EXISTS chat_cleared_at TIMESTAMPTZ",
 ]
 
 
