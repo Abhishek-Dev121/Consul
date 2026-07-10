@@ -96,10 +96,12 @@ def download_audio(audio_id: int, request: Request, db: Session = Depends(get_db
         raise HTTPException(status_code=404, detail="Audio not found")
     ensure_client_access(user, _client(db, rec.client_id))
     data = storage_service.read_bytes(rec.storage_key)
+    # Videos are stored as AudioRecording too — derive the real type from the
+    # filename so a .mp4 isn't served as audio (which stops it playing).
     return storage_service.range_response(
         request,
         data,
-        rec.content_type or "audio/mpeg",
+        storage_service.guess_content_type(rec.filename, rec.content_type),
         rec.filename,
         inline=True
     )

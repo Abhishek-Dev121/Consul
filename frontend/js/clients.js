@@ -324,4 +324,10 @@
   renderFilter();
   await loadOptions();
   await load();
+
+  // Auto-open the New Client modal when arriving via "New conversation" (/clients?new=1).
+  if (qs("new") && canWrite()) {
+    bootstrap.Modal.getOrCreateInstance(document.getElementById("clientModal")).show();
+    history.replaceState(null, "", "/clients");  // clean the URL so a refresh doesn't reopen it
+  }
 })();

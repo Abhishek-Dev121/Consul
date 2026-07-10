@@ -152,20 +152,17 @@ def download_file(file_id: int, request: Request, db: Session = Depends(get_db),
         raise HTTPException(status_code=404, detail="File not found")
     ensure_client_access(user, _client(db, rec.client_id))
     data = storage_service.read_bytes(rec.storage_key)
+    ctype = storage_service.guess_content_type(rec.filename, rec.content_type)
+    # Preview inline for media/pdf/text (by resolved MIME or extension), else download.
     ext = rec.filename.lower()
-    is_inline = any(ext.endswith(e) for e in [
-        ".mp4", ".mov", ".m4v", ".webm", ".avi", ".mkv",
-        ".mp3", ".wav", ".m4a", ".ogg",
-        ".png", ".jpg", ".jpeg", ".gif", ".webp",
-        ".pdf", ".txt"
-    ])
-    return storage_service.range_response(
-        request,
-        data,
-        rec.content_type or "application/octet-stream",
-        rec.filename,
-        inline=is_inline
-    )
+    is_inline = ctype.startswith(("image/", "video/", "audio/")) or ctype in ("application/pdf", "text/plain") \
+        or any(ext.endswith(e) for e in [
+            ".mp4", ".mov", ".m4v", ".webm", ".avi", ".mkv",
+            ".mp3", ".wav", ".m4a", ".ogg",
+            ".png", ".jpg", ".jpeg", ".gif", ".webp",
+            ".pdf", ".txt"
+        ])
+    return storage_service.range_response(request, data, ctype, rec.filename, inline=is_inline)
 
 
 @router.delete("/{file_id}", status_code=204)

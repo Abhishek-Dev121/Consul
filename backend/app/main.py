@@ -3,14 +3,38 @@
 Mounts all API routers, serves the static HTML frontend, seeds the database on
 startup, and exposes a health check.
 """
+import asyncio
+import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, status, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from sqlalchemy import text
 
 from app.config import settings
+from app.database import engine
+
+_log = logging.getLogger("uvicorn.error")
+
+
+async def _db_keepalive():
+    """Ping the database every few minutes so a serverless Postgres (e.g. Neon)
+    doesn't auto-suspend its compute. Without this, the first request after an
+    idle period pays a multi-second cold-start ('the page gets stuck')."""
+    interval = settings.db_keepalive_seconds
+    while True:
+        await asyncio.sleep(interval)
+        try:
+            await asyncio.to_thread(_ping_db)
+        except Exception as e:  # noqa: BLE001 — keep the loop alive
+            _log.warning("DB keepalive ping failed: %s", e)
+
+
+def _ping_db():
+    with engine.connect() as conn:
+        conn.execute(text("SELECT 1"))
 from app.routers import (
     activities,
     ai,
@@ -25,6 +49,7 @@ from app.routers import (
     overview,
     pages,
     projects,
+    realtime,
     users,
     chats,
 )
@@ -36,35 +61,14 @@ FRONTEND_DIR = Path(__file__).resolve().parents[2] / "frontend"
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
-    # Keep Neon connection warm — ping every 4 minutes so the DB doesn't cold-start.
-    import threading
-    from sqlalchemy import text
-    from app.database import SessionLocal
-
-    def _keep_alive():
-        import time
-        while True:
-            time.sleep(240)   # 4 minutes
-            try:
-                with SessionLocal() as db:
-                    db.execute(text("SELECT 1"))
-            except Exception:
-                pass  # silently ignore — server may be shutting down
-
-    # ── Warm-up: prime the connection pool immediately so the first user request
-    # ── doesn't pay the Neon cold-start penalty (can be 5-15 s on free tier).
-    try:
-        with SessionLocal() as _wdb:
-            _wdb.execute(text("SELECT 1"))
-    except Exception:
-        pass
-
-    t = threading.Thread(target=_keep_alive, daemon=True, name="neon-keepalive")
-    t.start()
-
+    task = asyncio.create_task(_db_keepalive()) if settings.db_keepalive_seconds > 0 else None
     from app.services.websocket_manager import manager
     await manager.init_redis()
-    yield
+    try:
+        yield
+    finally:
+        if task:
+            task.cancel()
 
 
 app = FastAPI(title=settings.app_name, lifespan=lifespan)
@@ -91,7 +95,7 @@ async def no_cache(request, call_next):
     return response
 
 # API routers
-for r in (auth, users, channels, clients, conversations, messages, projects, files, audio, ai, activities, bitrix, overview, chats):
+for r in (auth, users, channels, clients, conversations, messages, projects, files, audio, ai, activities, bitrix, overview, chats, realtime):
     app.include_router(r.router)
 
 

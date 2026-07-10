@@ -1,8 +1,13 @@
 (async function () {
-  const actions = `<button class="btn btn-primary" id="new-conv-btn" data-bs-toggle="modal" data-bs-target="#convModal">+ New conversation</button>`;
+  // "New conversation" starts by creating a client — send the user to the Clients
+  // page with the New Client form auto-opened.
+  const actions = `<a class="btn btn-primary" id="new-conv-btn" href="/clients?new=1">+ New conversation</a>`;
   await renderLayout("/conversations", "Conversations", { crumb: "Client chats with AI analysis", actions });
   const writable = canWrite();
   if (!writable) { const b = document.getElementById("new-conv-btn"); if (b) b.remove(); }
+  // Hide the redundant top-bar search on this page (the left panel already has one).
+  const tbSearch = document.querySelector(".tb-search");
+  if (tbSearch) tbSearch.style.display = "none";
 
   const FILTERS = ["all", "whatsapp", "upwork", "slack", "email", "telegram"];
   let clients = [], channels = [], active = null, chanFilter = "all", searchQ = "", view = "active";
@@ -13,21 +18,27 @@
   const _ns = (s) => (!s ? "neu" : s.toLowerCase().includes("pos") ? "pos" : s.toLowerCase().includes("neg") ? "neg" : "neu");
 
   // ─── Left panel ───
-  function renderViewTabs() {
-    document.querySelectorAll("#cl-view-tabs .f-chip").forEach((el) => {
-      el.classList.toggle("active", el.dataset.view === view);
-      el.onclick = () => {
-        if (view === el.dataset.view) return;
-        view = el.dataset.view;
-        renderViewTabs();
-        closeThread();
-        load();
-      };
-    });
+  function renderArchiveToggle() {
+    const btn = document.getElementById("archive-toggle");
+    if (!btn) return;
+    const archived = view === "archived";
+    btn.innerHTML = Icon("archive", { size: 16 });
+    btn.classList.toggle("on", archived);
+    btn.title = archived ? "Back to active chats" : "View archived chats";
+    btn.setAttribute("aria-label", btn.title);
+    const title = document.getElementById("cl-title");
+    if (title) title.textContent = archived ? "Archived" : "Conversations";
+    btn.onclick = () => {
+      view = archived ? "active" : "archived";
+      renderArchiveToggle();
+      closeThread();
+      load();
+    };
   }
 
   function closeThread() {
     active = null;
+    stopPresence();
     document.getElementById("empty-center").style.display = "flex";
     document.getElementById("thread-wrap").style.display = "none";
     document.getElementById("ai-scroll").innerHTML = `<div class="ai2-empty">
@@ -66,11 +77,37 @@
         ${view === "archived" ? "No archived conversations." : "No conversations found."}</div>`;
       return;
     }
-    const showDelBtn = view === "archived" ? canPurge : writable;
-    const delTitle = view === "archived" ? "Delete permanently" : "Archive";
-    const delIcon = view === "archived" ? Icon("trash", { size: 13 }) : Icon("x", { size: 13 });
-    scroll.innerHTML = list.map((cl) => {
+    const archived = view === "archived";
+    // Archive view gets an explanatory banner so it's obvious chats can come back.
+    const banner = archived
+      ? `<div class="arch-banner">
+           <span class="ab-ic">${Icon("archive", { size: 16 })}</span>
+           <div class="ab-txt"><b>Archived chats</b><span>Use <b>Restore</b> to move a chat back to your main list.</span></div>
+         </div>`
+      : "";
+    scroll.innerHTML = banner + list.map((cl) => {
       const plat = platOf(cl);
+      if (archived) {
+        // Archived row: prominent labeled Restore button + (admin) Delete.
+        return `<div class="ci2 is-archived" data-id="${cl.id}">
+          <span class="av2" style="background:${avHash(cl.name)}">
+            ${initialsOf(cl.name)}
+            <span class="ch-dot" style="background:${chanColor(plat)}"></span>
+          </span>
+          <div class="ci2-body">
+            <div class="ci2-row1"><span class="name">${esc(cl.name)}</span></div>
+            <div class="ci2-prev">${esc(cl.company || cl.email || "—")}</div>
+            <div class="arch-actions">
+              <button class="btn-restore" data-act="restore" data-id="${cl.id}">${Icon("restore", { size: 14 })} Restore</button>
+              ${canPurge ? `<button class="btn-purge" data-act="purge" data-id="${cl.id}" title="Delete permanently">${Icon("trash", { size: 13 })} Delete</button>` : ""}
+            </div>
+          </div>
+        </div>`;
+      }
+      // Active row: opens on click; hover reveals the Archive icon.
+      const actions = writable
+        ? `<button class="ci2-act" data-act="archive" data-id="${cl.id}" title="Archive chat">${Icon("archive", { size: 14 })}</button>`
+        : "";
       return `<div class="ci2 ${cl.id === active ? "on" : ""}" data-id="${cl.id}">
         <span class="av2" style="background:${avHash(cl.name)}">
           ${initialsOf(cl.name)}
@@ -88,26 +125,131 @@
             </span>
           </div>
         </div>
-        ${showDelBtn ? `<button class="ci2-del" data-del="${cl.id}" title="${delTitle}">${delIcon}</button>` : ""}
+        <div class="ci2-actions">${actions}</div>
       </div>`;
     }).join("");
-    document.querySelectorAll("#cl-scroll .ci2").forEach((el) =>
-      el.addEventListener("click", (e) => {
-        if (!e.target.closest(".ci2-del")) selectClient(parseInt(el.dataset.id));
-      }));
-    document.querySelectorAll("#cl-scroll .ci2-del").forEach((b) =>
+    // Archived chats do NOT open — they must be restored first.
+    if (!archived) {
+      document.querySelectorAll("#cl-scroll .ci2").forEach((el) =>
+        el.addEventListener("click", (e) => {
+          if (!e.target.closest(".ci2-act")) selectClient(parseInt(el.dataset.id));
+        }));
+    }
+    document.querySelectorAll("#cl-scroll [data-act]").forEach((b) =>
       b.addEventListener("click", (e) => {
         e.stopPropagation();
-        const id = parseInt(b.dataset.del);
-        if (view === "archived") permanentlyDeleteClient(id);
-        else archiveClient(id);
+        const id = parseInt(b.dataset.id);
+        const act = b.dataset.act;
+        if (act === "archive") archiveClient(id);
+        else if (act === "restore") restoreClient(id);
+        else if (act === "purge") permanentlyDeleteClient(id);
       }));
   }
 
   // ─── Center: message thread ───
   let pendingAttachments = [];
+  let recognition = null, recognizing = false;
+  let presenceTimer = null, typingSentAt = 0;
+  let replyingTo = null, selectMode = false, selected = new Set();
+
+  // ── Presence + typing + read receipts (team-scoped, light polling) ──
+  function markRead(clientId) { Api.post(`/api/clients/${clientId}/read`).catch(() => {}); }
+
+  function stopPresence() { if (presenceTimer) { clearInterval(presenceTimer); presenceTimer = null; } }
+
+  function startPresence(clientId) {
+    stopPresence();
+    const poll = async () => {
+      if (active !== clientId) { stopPresence(); return; }
+      try {
+        const p = await Api.get(`/api/clients/${clientId}/presence`);
+        updateTyping(p.typing || []);
+        updateOnline(p.online_user_ids || []);
+      } catch (_) {}
+    };
+    poll();
+    presenceTimer = setInterval(poll, 3000);
+  }
+
+  function updateTyping(names) {
+    const el = document.getElementById("wa-typing");
+    const txt = document.getElementById("wa-typing-txt");
+    if (!el || !txt) return;
+    if (names.length) {
+      txt.textContent = names.length === 1 ? `${names[0]} is typing…` : `${names.length} people are typing…`;
+      el.style.display = "flex";
+    } else { el.style.display = "none"; }
+  }
+
+  function updateOnline(ids) {
+    const pill = document.getElementById("online-pill");
+    const txt = document.getElementById("online-txt");
+    if (!pill || !txt) return;
+    const others = ids.filter((id) => id !== CURRENT_USER.id);
+    if (others.length) {
+      txt.textContent = `${others.length} teammate${others.length > 1 ? "s" : ""} online`;
+      pill.style.display = "inline-flex";
+    } else { pill.style.display = "none"; }
+  }
+
+  function signalTyping(clientId, textarea) {
+    let typingTimer = null;
+    const stopTyping = () => { Api.post(`/api/clients/${clientId}/typing`, { typing: false }).catch(() => {}); typingSentAt = 0; };
+    textarea.addEventListener("input", () => {
+      const now = Date.now();
+      if (now - typingSentAt > 2500) { typingSentAt = now; Api.post(`/api/clients/${clientId}/typing`, { typing: true }).catch(() => {}); }
+      clearTimeout(typingTimer);
+      typingTimer = setTimeout(stopTyping, 3000);
+    });
+    textarea.addEventListener("blur", stopTyping);
+  }
+
+  // Voice-to-text: uses the browser Web Speech API. Recognized words are written
+  // into the composer textarea so the user can review/edit before sending.
+  function setupVoiceInput(textarea, autoGrow) {
+    const micBtn = document.getElementById("mic-btn");
+    const hint = document.getElementById("mic-hint");
+    if (!micBtn) return;
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SR) {
+      micBtn.title = "Voice input isn't supported in this browser";
+      micBtn.addEventListener("click", () => toast("Voice input isn't supported here — try Google Chrome."));
+      return;
+    }
+    let baseText = "", finalText = "";
+    micBtn.addEventListener("click", () => {
+      if (recognizing) { try { recognition.stop(); } catch (_) {} return; }
+      recognition = new SR();
+      recognition.lang = navigator.language || "en-US";
+      recognition.interimResults = true;
+      recognition.continuous = true;
+      baseText = textarea.value ? textarea.value.replace(/\s+$/, "") + " " : "";
+      finalText = "";
+      recognition.onstart = () => { recognizing = true; micBtn.classList.add("listening"); if (hint) hint.style.display = "flex"; };
+      recognition.onresult = (ev) => {
+        let interim = "";
+        for (let i = ev.resultIndex; i < ev.results.length; i++) {
+          const t = ev.results[i][0].transcript;
+          if (ev.results[i].isFinal) finalText += t + " ";
+          else interim += t;
+        }
+        textarea.value = (baseText + finalText + interim).replace(/\s{2,}/g, " ");
+        autoGrow();
+      };
+      recognition.onerror = (ev) => {
+        if (ev.error === "not-allowed" || ev.error === "service-not-allowed")
+          toast("Microphone access denied. Allow mic permission to use voice input.");
+        else if (ev.error !== "aborted" && ev.error !== "no-speech")
+          toast("Voice input error: " + ev.error);
+      };
+      recognition.onend = () => { recognizing = false; micBtn.classList.remove("listening"); if (hint) hint.style.display = "none"; textarea.focus(); };
+      try { recognition.start(); } catch (_) {}
+    });
+  }
 
   async function renderThread() {
+    if (recognizing && recognition) { try { recognition.stop(); } catch (_) {} }
+    if (selectMode) exitSelectMode();
     const cl = clients.find((x) => x.id === active);
     const plat = platOf(cl);
 
@@ -123,6 +265,7 @@
             <span class="cd" style="background:${chanColor(plat)}"></span>${platformName(plat)}
           </span>
           ${cl.company ? `<span style="color:var(--muted-2)">· ${esc(cl.company)}</span>` : ""}
+          <span class="online-pill" id="online-pill" style="display:none"><span class="odot"></span><span id="online-txt"></span></span>
         </div>
       </div>
       <div class="th2-acts">
@@ -142,24 +285,27 @@
         </div>`;
     } else {
       document.getElementById("composer-area").innerHTML = `
-        <div class="perm-banner ${writable ? "ok" : "no"}">
+        ${writable ? "" : `<div class="perm-banner no">
           <svg class="perm-ic" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" viewBox="0 0 24 24">
-            ${writable ? '<path d="M5 13l4 4L19 7"/>' : '<rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>'}
+            <rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>
           </svg>
-          ${writable ? "You can reply to this conversation." : "Read-only role — replying is disabled."}
-        </div>
+          Read-only role — replying is disabled.
+        </div>`}
+        <div class="wa-typing" id="wa-typing" style="display:none"><span class="td"></span><span class="td"></span><span class="td"></span><span id="wa-typing-txt"></span></div>
+        <div class="wa-listening-hint" id="mic-hint" style="display:none"><span class="dot"></span> Listening… speak now. Your words appear in the box — review before sending.</div>
         <div id="att-preview-area" class="att-preview" style="display:none"></div>
-        <div class="composer-toolbar">
-          <button class="toolbar-btn" id="att-btn" title="Attach file" ${writable ? "" : "disabled"}>
-            <svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66L9.41 16.41a2 2 0 0 1-2.83-2.83l8.49-8.49"/></svg>
-          </button>
-          <div class="toolbar-sep"></div>
-          <span style="font-size:11px;color:var(--muted-2);padding:0 4px">Type your reply below</span>
-        </div>
-        <div class="composer-input-row">
-          <textarea id="composer-text" placeholder="${writable ? "Type a reply..." : "Replying is disabled for your role"}" ${writable ? "" : "disabled"} rows="1"></textarea>
-          <button class="send-btn2" id="send-btn" ${writable ? "" : "disabled"}>
-            <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24" style="transform:rotate(45deg) translateX(1px)">
+        <div class="wa-composer">
+          <div class="wa-input">
+            <button class="wa-icon-btn" id="att-btn" title="Attach file" ${writable ? "" : "disabled"}>
+              <svg width="19" height="19" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66L9.41 16.41a2 2 0 0 1-2.83-2.83l8.49-8.49"/></svg>
+            </button>
+            <textarea id="composer-text" placeholder="${writable ? "Type a message" : "Replying is disabled for your role"}" ${writable ? "" : "disabled"} rows="1"></textarea>
+            <button class="wa-icon-btn" id="mic-btn" title="Voice to text" ${writable ? "" : "disabled"}>
+              <svg width="19" height="19" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0"/><path d="M12 18v3"/></svg>
+            </button>
+          </div>
+          <button class="wa-send" id="send-btn" title="Send" ${writable ? "" : "disabled"}>
+            <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.4" viewBox="0 0 24 24" style="transform:translateX(1px)">
               <line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/>
             </svg>
           </button>
@@ -172,25 +318,30 @@
         const textarea = document.getElementById("composer-text");
 
         // Auto-resize textarea
-        textarea.addEventListener("input", () => {
-          textarea.style.height = "auto";
-          textarea.style.height = Math.min(textarea.scrollHeight, 130) + "px";
-        });
+        const autoGrow = () => { textarea.style.height = "auto"; textarea.style.height = Math.min(textarea.scrollHeight, 120) + "px"; };
+        textarea.addEventListener("input", autoGrow);
 
-        // Ctrl+Enter to send
+        // Enter to send, Shift+Enter for newline (WhatsApp-style)
         textarea.addEventListener("keydown", (e) => {
-          if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); sendMessage(); }
+          if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendMessage(); }
         });
 
         sendBtn.addEventListener("click", sendMessage);
         attBtn.addEventListener("click", () => attFileInput.click());
-        attFileInput.addEventListener("change", () => {
+        // #att-file-input is a persistent page element; use onchange (not
+        // addEventListener) so re-rendering the composer replaces the handler
+        // instead of stacking duplicates (which caused files to send twice).
+        attFileInput.onchange = () => {
           const files = Array.from(attFileInput.files);
           pendingAttachments.push(...files);
           renderAttPreviews();
           attFileInput.value = "";
-        });
+        };
+
+        setupVoiceInput(textarea, autoGrow);
+        signalTyping(cl.id, textarea);
       }
+      renderReplyBar();  // restore the reply preview if one is active
     }
 
     // Load messages
@@ -203,62 +354,318 @@
           <p style="max-width:220px">No messages yet. Start the conversation below.</p>
         </div>`;
       } else {
-        body.innerHTML = `<div class="day-sep2"><span>— conversation —</span></div>` +
-          msgs.map((m) => {
-            let content;
-            const token = Api.token();
-            const rawUrl = m.attachment_url || "";
-            const isExternal = rawUrl.startsWith("http");
-            const url = (rawUrl && !isExternal && token) ? `${rawUrl}?token=${token}` : rawUrl;
-            
-            const extLower = (m.attachment_name || "").toLowerCase();
-            const isVideo = extLower.endsWith(".mp4") || extLower.endsWith(".mov") || extLower.endsWith(".m4v") || extLower.endsWith(".webm") || extLower.endsWith(".avi") || extLower.endsWith(".mkv");
-            const isImage = extLower.endsWith(".png") || extLower.endsWith(".jpg") || extLower.endsWith(".jpeg") || extLower.endsWith(".gif") || extLower.endsWith(".webp");
-            if (m.attachment_type === "audio") {
-              if (isVideo) {
-                content = `<div class="att-video"><video controls preload="none" src="${esc(url)}" style="max-width:320px; border-radius:8px; display:block;"></video></div>`;
-              } else {
-                content = `<div class="att-audio"><audio controls preload="none" src="${esc(url)}"></audio></div>`;
-              }
-            } else if (m.attachment_type === "file") {
-              if (isImage) {
-                content = `<div class="att-image"><img src="${esc(url)}" style="max-width:320px; max-height:240px; border-radius:8px; display:block; cursor:pointer;" onclick="window.open('${esc(url)}', '_blank')" /></div>`;
-              } else {
-                const ext = isExternal ? "LINK" : (m.attachment_name || "file").split(".").pop().toUpperCase().slice(0, 4);
-                content = `<a class="att-file" href="${esc(url)}" target="_blank" rel="noopener">
-                  <div class="file-ic">${ext}</div>
-                  <div class="file-info">
-                    <div class="file-name">${esc(m.attachment_name || "Download")}</div>
-                    <div class="file-sub">${isExternal ? "Open link in new tab" : "Click to download"}</div>
-                  </div>
-                  <svg class="dl-ic" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-                </a>`;
-              }
-            } else {
-              content = `<div class="bubble2">${m.is_client ? "" : `<div class="msg-sender">${esc(m.sender_name)}</div>`}${esc(m.body)}</div>`;
-            }
-            return `<div class="msg2 ${m.is_client ? "in" : "out"}">
-              ${!m.is_client && m.attachment_type !== "file" ? `<div class="msg-sender">${esc(m.sender_name)}</div>` : ""}
-              ${content}
-              <div class="msg-meta">${m.is_client ? esc(m.sender_name) + " · " : ""}${m.sent_at ? fmtDate(m.sent_at) : ""}</div>
-            </div>`;
-          }).join("");
+        const token = Api.token();
+        const waTime = (d) => d ? new Date(d).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "";
+        const waDay = (d) => {
+          const dt = new Date(d), s = (x) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+          const diff = Math.round((s(new Date()) - s(dt)) / 86400000);
+          if (diff === 0) return "Today";
+          if (diff === 1) return "Yesterday";
+          return dt.toLocaleDateString(undefined, { day: "numeric", month: "long", year: "numeric" });
+        };
+        // Single tick = sent; double (blue) tick = seen by a teammate.
+        const SINGLE = `<svg width="15" height="14" viewBox="0 0 18 14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2 7.5l4 4L15 3"/></svg>`;
+        const DOUBLE = `<svg width="17" height="14" viewBox="0 0 22 14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2 7.5l4 4L14 3"/><path d="M8 11.5L16.5 3"/></svg>`;
+        const tickFor = (m) => `<span class="tick ${m.read ? "read" : ""}" title="${m.read ? "Seen by a teammate" : "Sent"}">${m.read ? DOUBLE : SINGLE}</span>`;
+
+        let html = "", lastDay = null, lastSide = null;
+        for (const m of msgs) {
+          const dt = m.sent_at || m.created_at;
+          const day = waDay(dt);
+          if (day !== lastDay) { html += `<div class="day-sep2">${esc(day)}</div>`; lastDay = day; lastSide = null; }
+          const side = m.is_client ? "in" : "out";
+          const groupStart = side !== lastSide;
+          lastSide = side;
+
+          const rawUrl = m.attachment_url || "";
+          const isExternal = rawUrl.startsWith("http");
+          const url = (rawUrl && !isExternal && token)
+            ? rawUrl + (rawUrl.includes("?") ? "&" : "?") + "token=" + encodeURIComponent(token)
+            : rawUrl;
+          const extLower = (m.attachment_name || "").toLowerCase();
+          const isVideo = [".mp4", ".mov", ".m4v", ".webm", ".avi", ".mkv"].some((e) => extLower.endsWith(e));
+          const isImage = [".png", ".jpg", ".jpeg", ".gif", ".webp"].some((e) => extLower.endsWith(e));
+
+          let content, hasAtt = false;
+          if (m.attachment_type === "audio" && isVideo) {
+            hasAtt = true;
+            content = `<div class="att-video"><video controls preload="metadata" src="${esc(url)}" style="max-width:100%;width:280px;border-radius:6px;display:block;"></video></div>`;
+          } else if (m.attachment_type === "audio") {
+            hasAtt = true;
+            content = `<div class="att-audio"><audio controls preload="none" src="${esc(url)}"></audio></div>`;
+          } else if (m.attachment_type === "file" && isImage) {
+            hasAtt = true;
+            content = `<div class="att-image"><img class="att-img" data-url="${esc(url)}" src="${esc(url)}" style="max-width:100%;width:280px;max-height:280px;object-fit:cover;border-radius:6px;display:block;cursor:pointer;" /></div>`;
+          } else if (m.attachment_type === "file") {
+            hasAtt = true;
+            const ext = isExternal ? "LINK" : (m.attachment_name || "file").split(".").pop().toUpperCase().slice(0, 4);
+            content = `<a class="att-file" href="${esc(url)}" target="_blank" rel="noopener">
+              <div class="file-ic">${ext}</div>
+              <div class="file-info">
+                <div class="file-name">${esc(m.attachment_name || "Download")}</div>
+                <div class="file-sub">${isExternal ? "Open link" : "Download"}</div>
+              </div>
+              <svg class="dl-ic" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+            </a>`;
+          } else {
+            content = esc(m.body);
+          }
+
+          // WhatsApp-style deleted placeholder + edited tag + actions.
+          if (m.deleted) {
+            content = `<span class="wa-deleted">${Icon("ban", { size: 13 })} This message was deleted</span>`;
+            hasAtt = false;
+          }
+          const withinWindow = dt && (Date.now() - new Date(dt).getTime() < 86400000);
+          const canDelete = m.mine && !m.deleted && m.id > 0 && withinWindow;
+          const canEdit = canDelete && !hasAtt;
+          const editedTag = (m.edited && !m.deleted) ? `<span class="wa-edited">edited</span>` : "";
+          // Quoted reply preview
+          const snippet = m.deleted ? "" : (m.body
+            || (m.attachment_type === "audio" ? (isVideo ? "Video" : "Audio")
+              : (m.attachment_type === "file" ? (isImage ? "Photo" : (m.attachment_name || "Document")) : "")));
+          const quote = m.reply_to_sender
+            ? `<div class="reply-quote"><span class="rq-sender">${esc(m.reply_to_sender)}</span><span class="rq-text">${esc(m.reply_to_text || "")}</span></div>`
+            : "";
+          // The options menu is available on every real, non-deleted message.
+          const menu = (!m.deleted && m.id > 0)
+            ? `<button class="msg-menu-btn" data-id="${m.id}" data-sender="${esc(m.sender_name)}" data-body="${esc(m.body || "")}" data-snippet="${esc(snippet)}" data-edit="${canEdit ? 1 : 0}" data-del="${canDelete ? 1 : 0}" title="Message options">
+                 <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="6" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="12" cy="18" r="1.6"/></svg>
+               </button>`
+            : "";
+
+          const sender = groupStart ? `<div class="wa-sender">${esc(m.sender_name)}</div>` : "";
+          const time = `<span class="wa-time">${editedTag}${waTime(dt)}${(side === "out" && !m.deleted) ? tickFor(m) : ""}</span>`;
+          const rawAttr = (!hasAtt && !m.deleted) ? ` data-raw="${esc(m.body)}"` : "";
+          html += `<div class="msg2 ${side} ${groupStart ? "grp" : ""} ${m.deleted ? "is-deleted" : ""}" data-mid="${m.id}" data-del="${canDelete ? 1 : 0}" data-snippet="${esc(snippet)}" data-sender="${esc(m.sender_name)}">
+            <span class="msg-check"></span>
+            <div class="bubble2 ${hasAtt ? "has-att" : ""}" data-mid="${m.id}"${rawAttr}>${quote}${sender}${content}${time}${menu}</div>
+          </div>`;
+        }
+        body.innerHTML = html;
+        wireMessageMenus(body);
         body.scrollTop = body.scrollHeight;
+        // Delegated image click → WhatsApp-style lightbox (no inline onclick = no XSS).
+        body.querySelectorAll(".att-img").forEach((img) =>
+          img.addEventListener("click", () => openLightbox(img.dataset.url)));
       }
     } catch (e) { toast(e.message); }
+  }
+
+  // ── Image lightbox (WhatsApp-style full-screen viewer) ──
+  function openLightbox(url) {
+    if (!url) return;
+    let el = document.getElementById("att-lightbox");
+    if (!el) {
+      el = document.createElement("div");
+      el.id = "att-lightbox";
+      el.innerHTML = `
+        <button class="lb-close" title="Close" aria-label="Close">${Icon("x", { size: 22 })}</button>
+        <a class="lb-download" title="Download" download><span></span>${Icon("download", { size: 20 })}</a>
+        <img class="lb-img" alt="" />`;
+      document.body.appendChild(el);
+      const close = () => el.classList.remove("show");
+      el.addEventListener("click", (e) => { if (e.target === el) close(); });
+      el.querySelector(".lb-close").addEventListener("click", close);
+      document.addEventListener("keydown", (e) => { if (e.key === "Escape") close(); });
+    }
+    el.querySelector(".lb-img").src = url;
+    el.querySelector(".lb-download").href = url;
+    el.classList.add("show");
+  }
+
+  // ── Own-message edit / delete-for-everyone (within 24h) ──
+  function closeMsgMenu() { const m = document.getElementById("msg-menu"); if (m) m.remove(); }
+  document.addEventListener("click", closeMsgMenu);
+
+  function wireMessageMenus(body) {
+    body.querySelectorAll(".msg-menu-btn").forEach((btn) => {
+      btn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const open = document.getElementById("msg-menu");
+        closeMsgMenu();
+        if (open && open.dataset.for === btn.dataset.id) return;  // toggle off
+        const id = parseInt(btn.dataset.id);
+        const d = btn.dataset;
+        const canEdit = d.edit === "1", canDel = d.del === "1", hasBody = !!d.body;
+        const menu = document.createElement("div");
+        menu.className = "msg-menu"; menu.id = "msg-menu"; menu.dataset.for = d.id;
+        menu.innerHTML =
+          `<button data-a="reply">${Icon("restore", { size: 14 })} Reply</button>` +
+          (hasBody ? `<button data-a="copy">${Icon("clipboard", { size: 14 })} Copy</button>` : "") +
+          `<button data-a="select">${Icon("check", { size: 14 })} Select</button>` +
+          (canEdit ? `<button data-a="edit">${Icon("edit", { size: 14 })} Edit</button>` : "") +
+          `<button data-a="hide" class="danger">${Icon("trash", { size: 14 })} Delete for me</button>` +
+          (canDel ? `<button data-a="deleteall" class="danger">${Icon("trash", { size: 14 })} Delete for everyone</button>` : "");
+        menu.addEventListener("click", (ev) => ev.stopPropagation());
+        document.body.appendChild(menu);
+        const r = btn.getBoundingClientRect();
+        menu.style.top = `${Math.min(r.bottom + 4, window.innerHeight - menu.offsetHeight - 8)}px`;
+        menu.style.left = `${Math.max(8, Math.min(r.left - 120, window.innerWidth - menu.offsetWidth - 10))}px`;
+        const on = (a, fn) => { const b = menu.querySelector(`[data-a="${a}"]`); if (b) b.addEventListener("click", () => { closeMsgMenu(); fn(); }); };
+        on("reply", () => setReply(id, d.sender, d.snippet));
+        on("copy", () => copyText(d.body));
+        on("select", () => enterSelectMode(id));
+        on("edit", () => startEditMessage(id, btn));
+        on("hide", () => hideChatMessage(id));
+        on("deleteall", () => deleteChatMessage(id));
+      });
+    });
+  }
+
+  async function copyText(text) {
+    try { await navigator.clipboard.writeText(text || ""); toast("Copied to clipboard", "success"); }
+    catch (_) { toast("Couldn't copy — check browser permissions"); }
+  }
+
+  // ── Reply (quoted) ──
+  function setReply(id, sender, snippet) {
+    replyingTo = { id, sender: sender || "", snippet: snippet || "" };
+    renderReplyBar();
+    const ta = document.getElementById("composer-text"); if (ta) ta.focus();
+  }
+  function clearReply() { replyingTo = null; renderReplyBar(); }
+  function renderReplyBar() {
+    const area = document.getElementById("composer-area");
+    if (!area) return;
+    let bar = document.getElementById("reply-bar");
+    if (!replyingTo) { if (bar) bar.remove(); return; }
+    if (!bar) { bar = document.createElement("div"); bar.id = "reply-bar"; area.insertBefore(bar, area.firstChild); }
+    bar.innerHTML = `<div class="rb-body"><span class="rb-sender">${esc(replyingTo.sender)}</span><span class="rb-text">${esc(replyingTo.snippet)}</span></div>
+      <button class="rb-close" title="Cancel reply">${Icon("x", { size: 16 })}</button>`;
+    bar.querySelector(".rb-close").onclick = clearReply;
+  }
+
+  // ── Select mode (multi-select) ──
+  function enterSelectMode(firstId) {
+    selectMode = true;
+    selected = new Set(firstId != null && firstId > 0 ? [firstId] : []);
+    const body = document.getElementById("th2-body");
+    if (body) body.classList.add("select-mode");
+    document.querySelectorAll(".msg2").forEach((el) => el.classList.toggle("selected", selected.has(parseInt(el.dataset.mid))));
+    updateSelectionUI();
+  }
+  function exitSelectMode() {
+    selectMode = false; selected.clear();
+    const body = document.getElementById("th2-body");
+    if (body) body.classList.remove("select-mode");
+    document.querySelectorAll(".msg2.selected").forEach((el) => el.classList.remove("selected"));
+    const bar = document.getElementById("select-bar"); if (bar) bar.remove();
+  }
+  function updateSelectionUI() {
+    let bar = document.getElementById("select-bar");
+    if (!bar) { bar = document.createElement("div"); bar.id = "select-bar"; document.getElementById("conv-center").appendChild(bar); }
+    const n = selected.size;
+    bar.innerHTML = `<button class="sb-close" title="Cancel">${Icon("x", { size: 18 })}</button>
+      <span class="sb-count">${n} selected</span>
+      <div class="sb-actions">
+        <button class="sb-copy" ${n ? "" : "disabled"}>${Icon("clipboard", { size: 15 })} Copy</button>
+        <button class="sb-del danger" ${n ? "" : "disabled"}>${Icon("trash", { size: 15 })} Delete</button>
+      </div>`;
+    bar.querySelector(".sb-close").onclick = exitSelectMode;
+    bar.querySelector(".sb-copy").onclick = copySelected;
+    bar.querySelector(".sb-del").onclick = deleteSelected;
+  }
+  async function copySelected() {
+    const parts = [];
+    document.querySelectorAll("#th2-body .msg2").forEach((row) => {
+      if (selected.has(parseInt(row.dataset.mid))) {
+        const s = row.dataset.snippet || "";
+        parts.push(selected.size > 1 ? `${row.dataset.sender || ""}: ${s}` : s);
+      }
+    });
+    await copyText(parts.join("\n"));
+    exitSelectMode();
+  }
+  async function deleteSelected() {
+    const ids = [...document.querySelectorAll("#th2-body .msg2")]
+      .filter((row) => selected.has(parseInt(row.dataset.mid)) && row.dataset.del === "1")
+      .map((row) => parseInt(row.dataset.mid));
+    if (!ids.length) { toast("You can only delete your own messages (within 24h)"); return; }
+    const ok = await confirmDialog(
+      `Delete ${ids.length} message${ids.length > 1 ? "s" : ""} for everyone? This can't be undone.`,
+      { title: "Delete messages?", confirmText: "Delete for everyone" }
+    );
+    if (!ok) return;
+    try {
+      for (const id of ids) await Api.del(`/api/clients/${active}/messages/${id}`);
+      exitSelectMode();
+      await renderThread();
+      toast("Messages deleted", "success");
+    } catch (e) { toast(e.message); }
+  }
+
+  function startEditMessage(id, btn) {
+    const bubble = btn.closest(".bubble2");
+    if (!bubble) return;
+    const raw = bubble.dataset.raw || "";
+    bubble.classList.add("editing");
+    bubble.innerHTML = `<textarea class="msg-edit-ta" rows="1"></textarea>
+      <div class="msg-edit-actions">
+        <button class="me-cancel">Cancel</button>
+        <button class="me-save">Save</button>
+      </div>`;
+    const ta = bubble.querySelector(".msg-edit-ta");
+    ta.value = raw;
+    ta.style.height = "auto"; ta.style.height = Math.min(ta.scrollHeight, 140) + "px";
+    ta.focus(); ta.setSelectionRange(raw.length, raw.length);
+    ta.addEventListener("input", () => { ta.style.height = "auto"; ta.style.height = Math.min(ta.scrollHeight, 140) + "px"; });
+    const save = async () => {
+      const val = ta.value.trim();
+      if (!val) return toast("Message can't be empty");
+      try { await Api.patch(`/api/clients/${active}/messages/${id}`, { body: val }); await renderThread(); toast("Message edited", "success"); }
+      catch (e) { toast(e.message); }
+    };
+    bubble.querySelector(".me-cancel").onclick = () => renderThread();
+    bubble.querySelector(".me-save").onclick = save;
+    ta.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); save(); }
+      if (e.key === "Escape") renderThread();
+    });
+  }
+
+  async function deleteChatMessage(id) {
+    const ok = await confirmDialog(
+      "This removes the message for everyone in this conversation. This can't be undone.",
+      { title: "Delete for everyone?", confirmText: "Delete for everyone" }
+    );
+    if (!ok) return;
+    try { await Api.del(`/api/clients/${active}/messages/${id}`); await renderThread(); toast("Message deleted for everyone", "success"); }
+    catch (e) { toast(e.message); }
+  }
+
+  async function hideChatMessage(id) {
+    // "Delete for me" — hides only from the current user's view.
+    try { await Api.post(`/api/clients/${active}/messages/${id}/hide`); await renderThread(); toast("Message deleted for you", "success"); }
+    catch (e) { toast(e.message); }
   }
 
   function renderAttPreviews() {
     const area = document.getElementById("att-preview-area");
     if (!area) return;
+    // Revoke any object URLs from a previous render to avoid leaks.
+    area.querySelectorAll("[data-objurl]").forEach((el) => URL.revokeObjectURL(el.dataset.objurl));
     if (!pendingAttachments.length) { area.style.display = "none"; area.innerHTML = ""; return; }
     area.style.display = "flex";
-    area.innerHTML = pendingAttachments.map((f, i) => `
-      <div class="att-chip">
-        <svg width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+    area.innerHTML = pendingAttachments.map((f, i) => {
+      const isImg = f.type.startsWith("image/");
+      const isVid = f.type.startsWith("video/");
+      let thumb;
+      if (isImg) {
+        const u = URL.createObjectURL(f);
+        thumb = `<img class="att-thumb" data-objurl="${u}" src="${u}" alt="" />`;
+      } else if (isVid) {
+        const u = URL.createObjectURL(f);
+        thumb = `<video class="att-thumb" data-objurl="${u}" src="${u}" muted></video>`;
+      } else {
+        thumb = `<span class="att-thumb att-thumb-file">${Icon("file", { size: 18 })}</span>`;
+      }
+      return `<div class="att-chip">
+        ${thumb}
         <span class="att-nm">${esc(f.name)}</span>
         <button class="att-rm" data-idx="${i}" title="Remove">${Icon("x", { size: 12 })}</button>
-      </div>`).join("");
+      </div>`;
+    }).join("");
     area.querySelectorAll(".att-rm").forEach((b) =>
       b.addEventListener("click", () => {
         pendingAttachments.splice(parseInt(b.dataset.idx), 1);
@@ -272,11 +679,12 @@
     if (!text && !pendingAttachments.length) return;
     const cl = clients.find((x) => x.id === active);
     try {
-      // Send text first
+      // Send text first (carrying the quoted-reply target, if any).
       if (text) {
-        await Api.post(`/api/clients/${cl.id}/messages`, { body: text });
+        await Api.post(`/api/clients/${cl.id}/messages`, { body: text, reply_to_id: replyingTo ? replyingTo.id : null });
         ta.value = "";
         ta.style.height = "auto";
+        clearReply();
       }
       // Then upload each attachment — this endpoint classifies by file type and
       // routes video/audio to the audio folder, everything else to documents.
@@ -387,6 +795,8 @@
   function selectClient(id) {
     active = id;
     pendingAttachments = [];
+    replyingTo = null;  // reply context is per-thread
+    if (selectMode) exitSelectMode();
     document.querySelectorAll("#cl-scroll .ci2").forEach((el) =>
       el.classList.toggle("on", parseInt(el.dataset.id) === id));
     // Show thread area
@@ -394,6 +804,8 @@
     document.getElementById("thread-wrap").style.display = "flex";
     renderThread();
     renderAI();
+    // Only active (non-archived) threads get live presence + read receipts.
+    if (view !== "archived") { markRead(id); startPresence(id); }
   }
 
   async function archiveClient(id) {
@@ -410,6 +822,17 @@
       if (active === id) closeThread();
       renderList();
       toast("Chat archived", "success");
+    } catch (e) { toast(e.message); }
+  }
+
+  async function restoreClient(id) {
+    const cl = clients.find((c) => c.id === id);
+    try {
+      const convs = await Api.get(`/api/conversations?client_id=${id}&is_deleted=true`).catch(() => []);
+      for (const cv of convs) await Api.post(`/api/conversations/${cv.id}/restore`);
+      clients = clients.filter((c) => c.id !== id);  // leaves the archive list
+      renderList();
+      toast(`${cl ? cl.name + "'s chat" : "Chat"} restored`, "success");
     } catch (e) { toast(e.message); }
   }
 
@@ -493,6 +916,20 @@
   makeDraggable("drag-left", "conv-left", "left");
   makeDraggable("drag-right", "conv-right", "right");
 
+  // In select mode, clicking a message toggles its selection (capture phase so it
+  // preempts the image-lightbox / other click handlers).
+  document.getElementById("th2-body").addEventListener("click", (e) => {
+    if (!selectMode) return;
+    const row = e.target.closest(".msg2");
+    if (!row) return;
+    const id = parseInt(row.dataset.mid);
+    if (isNaN(id)) return;
+    e.stopPropagation(); e.preventDefault();
+    if (selected.has(id)) { selected.delete(id); row.classList.remove("selected"); }
+    else { selected.add(id); row.classList.add("selected"); }
+    updateSelectionUI();
+  }, true);
+
   // ─── Search ───
   document.getElementById("cl-search").addEventListener("input", (e) => {
     searchQ = e.target.value;
@@ -508,7 +945,7 @@
     clients = cls; channels = chs;
     populateConvModal();
     document.getElementById("nc-save").addEventListener("click", saveNewConversation);
-    renderViewTabs(); renderFilter(); renderList();
+    renderArchiveToggle(); renderFilter(); renderList();
     const first = (preselect && clients.find((c) => c.id === preselect)) ? preselect : (clients[0] && clients[0].id);
     if (first) selectClient(first);
   } catch (e) { toast(e.message); }

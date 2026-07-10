@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
@@ -14,9 +14,12 @@ from app.models.file import FileRecord
 from app.models.message import Message
 from app.models.user import User
 from app.rbac import ensure_can_write, ensure_client_access
-from app.schemas.message import MessageCreate, MessageOut
+from app.schemas.message import MessageCreate, MessageEdit, MessageOut
 from app.services import chat_service, storage_service
 from app.services.activity_service import log_activity
+
+# WhatsApp-style: a sender can edit/delete their own message within this window.
+EDIT_DELETE_WINDOW = timedelta(hours=24)
 
 _AUDIO_EXTS = {
     ".mp3", ".wav", ".m4a", ".ogg", ".oga", ".webm", ".aac", ".flac",
@@ -56,6 +59,14 @@ def list_messages(client_id: int, db: Session = Depends(get_db), user: User = De
     ensure_client_access(user, client)
     messages = chat_service.list_client_messages(db, client)
     db.commit()  # persist any lazy backfill
+
+    # "Delete for me" — drop messages this user has hidden from their own view.
+    from app.models.read_state import MessageHidden
+    hidden_ids = set(db.execute(
+        select(MessageHidden.message_id).where(MessageHidden.user_id == user.id)
+    ).scalars().all())
+    if hidden_ids:
+        messages = [m for m in messages if m.id not in hidden_ids]
     
     # Load all FileRecords and AudioRecordings to merge them into the message feed
     from app.models.file import FileRecord
@@ -93,6 +104,7 @@ def list_messages(client_id: int, db: Session = Depends(get_db), user: User = De
                 "attachment_name": f.filename,
                 "sent_at": f.created_at,
                 "created_at": f.created_at,
+                "created_by": f.uploaded_by,
             })
             
     for a in audios:
@@ -117,13 +129,69 @@ def list_messages(client_id: int, db: Session = Depends(get_db), user: User = De
                 "attachment_name": a.filename,
                 "sent_at": a.created_at,
                 "created_at": a.created_at,
+                "created_by": a.uploaded_by,
             })
             
     # Sort merged list chronologically
     merged.sort(key=lambda m: (
         (m.sent_at or m.created_at) if isinstance(m, Message) else (m.get('sent_at') or m.get('created_at'))
     ))
-    
+
+    # WhatsApp-style read receipts: an outgoing (team) message is "read" once a
+    # DIFFERENT teammate has opened this thread at/after the message was sent.
+    from app.models.read_state import ClientRead
+    reads = db.execute(
+        select(ClientRead.user_id, ClientRead.last_read_at).where(ClientRead.client_id == client_id)
+    ).all()
+
+    def _aware(dt):
+        return dt if (dt is None or dt.tzinfo) else dt.replace(tzinfo=timezone.utc)
+
+    def _is_read(when, sender_id):
+        when = _aware(when)
+        if when is None:
+            return False
+        return any(uid != sender_id and _aware(lr) >= when for uid, lr in reads)
+
+    for m in merged:
+        if isinstance(m, Message):
+            m.read = (not m.is_client) and _is_read(m.sent_at or m.created_at, m.created_by)
+            m.mine = m.created_by is not None and m.created_by == user.id
+            m.edited = m.edited_at is not None
+            m.deleted = bool(m.is_deleted)
+            if m.deleted:  # don't leak deleted content — show the placeholder
+                m.body = ""
+                m.attachment_type = m.attachment_url = m.attachment_name = None
+        else:
+            m["read"] = (not m["is_client"]) and _is_read(m.get("sent_at") or m.get("created_at"), m.get("created_by"))
+            m["mine"] = m.get("created_by") is not None and m.get("created_by") == user.id
+            m["edited"] = False
+            m["deleted"] = False
+
+    # Resolve quoted-reply previews from the real messages we already have.
+    by_id = {m.id: m for m in merged if isinstance(m, Message)}
+
+    def _snippet(msg) -> str:
+        if getattr(msg, "is_deleted", False):
+            return "Deleted message"
+        if msg.body:
+            return msg.body[:120]
+        at = msg.attachment_type
+        name = (msg.attachment_name or "").lower()
+        if at == "audio":
+            return "Video" if any(name.endswith(e) for e in (".mp4", ".mov", ".m4v", ".webm", ".avi", ".mkv")) else "Audio"
+        if at == "file":
+            return "Photo" if any(name.endswith(e) for e in (".png", ".jpg", ".jpeg", ".gif", ".webp")) else (msg.attachment_name or "Document")
+        return "Message"
+
+    for m in merged:
+        rid = m.reply_to_id if isinstance(m, Message) else None
+        if rid and rid in by_id:
+            tgt = by_id[rid]
+            if isinstance(m, Message):
+                m.reply_to_sender = tgt.sender_name
+                m.reply_to_text = _snippet(tgt)
+
     return merged
 
 
@@ -142,6 +210,12 @@ def send_message(
     channel_id = payload.channel_id
     if channel_id is None and client.channels:
         channel_id = client.channels[0].id
+    # Validate the reply target belongs to this same client.
+    reply_to_id = None
+    if payload.reply_to_id:
+        tgt = db.get(Message, payload.reply_to_id)
+        if tgt and tgt.client_id == client.id:
+            reply_to_id = tgt.id
     conv = _ensure_conversation(db, client, channel_id)
     msg = Message(
         client_id=client.id,
@@ -152,6 +226,7 @@ def send_message(
         is_client=False,
         sent_at=datetime.now(timezone.utc),
         created_by=actor.id,
+        reply_to_id=reply_to_id,
     )
     db.add(msg)
     
@@ -226,6 +301,7 @@ def send_message(
     log_activity(db, action="message.sent", actor_id=actor.id, client_id=client.id)
     db.commit()
     db.refresh(msg)
+    msg.mine = True
     return msg
 
 
@@ -244,7 +320,9 @@ async def send_attachment(
     data = await upload.read()
     filename = upload.filename or "attachment"
     ext = Path(filename).suffix.lower()
-    is_audio = (upload.content_type or "").startswith("audio") or ext in _AUDIO_EXTS
+    # Resolve the real MIME once (browsers sometimes omit it) so playback/preview works later.
+    ctype = storage_service.guess_content_type(filename, upload.content_type)
+    is_audio = ctype.startswith(("audio", "video")) or ext in _AUDIO_EXTS
     channel_id = client.channels[0].id if client.channels else None
     folder = storage_service.client_dir(client)
 
@@ -264,7 +342,7 @@ async def send_attachment(
         prefix = f"{folder}/projects/{project_folder_name}" if project_id else f"{folder}/audio"
         key = storage_service.save_bytes(data, filename, prefix=prefix)
         rec = AudioRecording(client_id=client.id, project_id=project_id, filename=filename, storage_key=key,
-                             content_type=upload.content_type, uploaded_by=actor.id)
+                             content_type=ctype, uploaded_by=actor.id)
         db.add(rec); db.flush()
         attach_type, attach_url = "audio", f"/api/audio/{rec.id}/download"
         log_activity(db, action="audio.uploaded", actor_id=actor.id, client_id=client.id, detail={"filename": filename})
@@ -272,7 +350,7 @@ async def send_attachment(
         prefix = f"{folder}/projects/{project_folder_name}" if project_id else f"{folder}/documents"
         key = storage_service.save_bytes(data, filename, prefix=prefix)
         rec = FileRecord(client_id=client.id, project_id=project_id, filename=filename, storage_key=key,
-                          content_type=upload.content_type, size=len(data), uploaded_by=actor.id)
+                          content_type=ctype, size=len(data), uploaded_by=actor.id)
         db.add(rec); db.flush()
         attach_type, attach_url = "file", f"/api/files/{rec.id}/download"
         log_activity(db, action="file.uploaded", actor_id=actor.id, client_id=client.id, detail={"filename": filename})
@@ -286,4 +364,78 @@ async def send_attachment(
     db.add(msg)
     db.commit()
     db.refresh(msg)
+    msg.mine = True
     return msg
+
+
+def _own_recent_message(db: Session, client_id: int, message_id: int, actor: User) -> Message:
+    """Load a real Message that belongs to the actor and is still inside the
+    edit/delete window. Raises the appropriate HTTP error otherwise."""
+    ensure_client_access(actor, _client(db, client_id))
+    msg = db.get(Message, message_id)
+    if not msg or msg.client_id != client_id:
+        raise HTTPException(status_code=404, detail="Message not found")
+    if msg.created_by is None or msg.created_by != actor.id:
+        raise HTTPException(status_code=403, detail="You can only change your own messages")
+    if msg.is_deleted:
+        raise HTTPException(status_code=400, detail="This message was already deleted")
+    when = msg.sent_at or msg.created_at
+    if when and when.tzinfo is None:
+        when = when.replace(tzinfo=timezone.utc)
+    if when and datetime.now(timezone.utc) - when > EDIT_DELETE_WINDOW:
+        raise HTTPException(status_code=403, detail="The 24-hour window to edit or delete has passed")
+    return msg
+
+
+@router.patch("/{client_id}/messages/{message_id}", response_model=MessageOut)
+def edit_message(
+    client_id: int, message_id: int, payload: MessageEdit,
+    db: Session = Depends(get_db), actor: User = Depends(get_current_user),
+):
+    """Edit the text of your own message (within 24h). Attachments can't be edited."""
+    ensure_can_write(actor)
+    msg = _own_recent_message(db, client_id, message_id, actor)
+    if msg.attachment_type:
+        raise HTTPException(status_code=400, detail="Media messages can't be edited")
+    new_body = (payload.body or "").strip()
+    if not new_body:
+        raise HTTPException(status_code=400, detail="Message can't be empty")
+    msg.body = new_body
+    msg.edited_at = datetime.now(timezone.utc)
+    db.commit()
+    db.refresh(msg)
+    msg.mine, msg.edited = True, True
+    return msg
+
+
+@router.delete("/{client_id}/messages/{message_id}", status_code=204)
+def delete_message(
+    client_id: int, message_id: int,
+    db: Session = Depends(get_db), actor: User = Depends(get_current_user),
+):
+    """Delete-for-everyone: soft-delete your own message (within 24h). The row
+    stays as a 'This message was deleted' placeholder, WhatsApp-style."""
+    ensure_can_write(actor)
+    msg = _own_recent_message(db, client_id, message_id, actor)
+    msg.is_deleted = True
+    db.commit()
+
+
+@router.post("/{client_id}/messages/{message_id}/hide", status_code=204)
+def hide_message(
+    client_id: int, message_id: int,
+    db: Session = Depends(get_db), actor: User = Depends(get_current_user),
+):
+    """Delete-for-me: hide a message from the current user's own view only. Any
+    message can be hidden; it stays visible to everyone else."""
+    from app.models.read_state import MessageHidden
+    ensure_client_access(actor, _client(db, client_id))
+    msg = db.get(Message, message_id)
+    if not msg or msg.client_id != client_id:
+        raise HTTPException(status_code=404, detail="Message not found")
+    exists = db.execute(
+        select(MessageHidden).where(MessageHidden.user_id == actor.id, MessageHidden.message_id == message_id)
+    ).scalar_one_or_none()
+    if not exists:
+        db.add(MessageHidden(user_id=actor.id, message_id=message_id))
+        db.commit()

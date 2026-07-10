@@ -118,6 +118,20 @@ def delete_conversation(
     db.commit()
 
 
+@router.post("/{conv_id}/restore", status_code=204)
+def restore_conversation(
+    conv_id: int, db: Session = Depends(get_db), actor: User = Depends(get_current_user)
+):
+    """Un-archive a soft-deleted conversation so it returns to the active list."""
+    conv = _load(db, conv_id)
+    ensure_client_access(actor, db.get(Client, conv.client_id))
+    ensure_can_write(actor)
+    conv.is_deleted = False
+    log_activity(db, action="conversation.restored", actor_id=actor.id, client_id=conv.client_id,
+                 detail={"conversation_id": conv.id})
+    db.commit()
+
+
 @router.delete("/{conv_id}/permanent", status_code=204)
 def permanently_delete_conversation(
     conv_id: int, db: Session = Depends(get_db), actor: User = Depends(get_current_user)

@@ -43,6 +43,9 @@ const ICONS = {
   archive: '<rect x="3" y="4" width="18" height="4" rx="1"/><path d="M5 8v10a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8"/><path d="M10 13h4"/>',
   logout: '<path d="M9 21H6a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3"/><path d="M16 17l5-5-5-5"/><path d="M21 12H9"/>',
   chevronDown: '<path d="M6 9l6 6 6-6"/>',
+  restore: '<path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/>',
+  // Consul brand monogram — a bold "C" ring.
+  consul: '<path d="M17 7a6.6 6.6 0 1 0 0 10" stroke-width="2.6"/>',
 };
 function Icon(name, opts = {}) {
   const size = opts.size || 16;

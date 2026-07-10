@@ -1,4 +1,4 @@
-// Shared chrome: ClientHub dark sidebar (grouped, role-aware) + crumbs topbar.
+// Shared chrome: Consul dark sidebar (grouped, role-aware) + crumbs topbar.
 // Each page calls renderLayout(active, title, { crumb, actions }).
 const ROLE_RANK = { employee: 1, team_lead: 2, admin: 3, super_admin: 4 };
 
@@ -104,8 +104,9 @@ function doRenderLayout(active, pageTitle, user, opts) {
   if (sidebarEl) {
     sidebarEl.innerHTML = `
       <div class="brand">
-        <div class="logo">${Icon("message", { size: 20, inline: false })}</div>
-        <div><h1>ClientHub</h1><div class="tag">Bitrix24 Local App</div></div>
+        <div class="logo">${Icon("consul", { size: 20, inline: false })}</div>
+        <div class="brand-text"><h1>Consul</h1><div class="tag">Bitrix24 Local App</div></div>
+        <button class="nav-collapse-btn" id="nav-collapse" title="Collapse sidebar" aria-label="Collapse sidebar">${Icon("menu", { size: 17 })}</button>
       </div>
       <nav class="nav">${sections}</nav>
       <div class="rail-foot">
@@ -140,7 +141,6 @@ function doRenderLayout(active, pageTitle, user, opts) {
   if (topbarEl) {
     topbarEl.innerHTML = `
       <div class="d-flex align-items-center gap-2" style="min-width:0">
-        <button class="icon-btn tb-nav-toggle" id="nav-toggle" title="Collapse sidebar" aria-label="Collapse sidebar">${Icon("menu")}</button>
         <button class="icon-btn tb-hamburger" id="nav-hamburger" title="Menu" aria-label="Open menu">${Icon("menu")}</button>
         <div class="crumbs">
           <span class="page-h">${esc(pageTitle || "")}</span>
@@ -162,7 +162,7 @@ function doRenderLayout(active, pageTitle, user, opts) {
         <div class="dropdown">
           <button class="icon-btn" data-bs-toggle="dropdown" title="Help">${Icon("help")}</button>
           <div class="dropdown-menu dropdown-menu-end p-3" style="width:260px">
-            <h6 class="mb-1" style="font-family:var(--display)">ClientHub</h6>
+            <h6 class="mb-1" style="font-family:var(--display)">Consul</h6>
             <p class="muted small mb-2">Bitrix24 Local App</p>
             <div class="small">Use the sidebar to navigate, click a KPI to drill in, and manage your password under <b>My account</b>.</div>
             <hr class="my-2"><div class="small muted">Support · info@devexhub.com</div>
@@ -187,7 +187,7 @@ async function renderLayout(active, pageTitle, opts = {}) {
     // If no cache, render a basic skeleton sidebar so we don't have empty layout shift
     const sb = document.getElementById("app-sidebar");
     if (sb) {
-      sb.innerHTML = `<div class="brand"><div class="logo">📨</div><div><h1>ClientHub</h1></div></div>
+      sb.innerHTML = `<div class="brand"><div class="logo">📨</div><div><h1>Consul</h1></div></div>
         <div style="padding: 20px;"><div class="skeleton" style="height:30px;margin-bottom:15px;"></div><div class="skeleton" style="height:30px;margin-bottom:15px;"></div><div class="skeleton" style="height:30px;"></div></div>`;
     }
   }
@@ -209,7 +209,7 @@ function wireChrome() {
   if (themeBtn) themeBtn.onclick = toggleTheme;
 
   const shell = document.querySelector(".app-shell");
-  const navToggle = document.getElementById("nav-toggle");
+  const navToggle = document.getElementById("nav-collapse");
   if (navToggle && shell) navToggle.onclick = () => {
     setNavCollapsed(shell, !shell.classList.contains("nav-collapsed"));
     localStorage.setItem("ch_nav", shell.classList.contains("nav-collapsed") ? "collapsed" : "expanded");

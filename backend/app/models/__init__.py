@@ -14,3 +14,4 @@ from app.models.audio import AudioRecording  # noqa: F401
 from app.models.activity import Activity  # noqa: F401
 from app.models.ai_analysis import AIAnalysis  # noqa: F401
 from app.models.bitrix import BitrixToken  # noqa: F401
+from app.models.read_state import ClientRead, MessageHidden  # noqa: F401
