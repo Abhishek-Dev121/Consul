@@ -30,4 +30,6 @@ def get_current_user(
     user = db.get(User, int(payload["sub"]))
     if user is None or not user.is_active:
         raise credentials_exc
+    from app.services import presence
+    presence.touch(user.id)
     return user

@@ -608,9 +608,87 @@
     };
   }
 
+  // ── Media gallery (WhatsApp-style: all shared photos/videos/audio/docs) ──
+  const _tok = (u) => u.startsWith("http") ? u : u + (u.includes("?") ? "&" : "?") + "token=" + encodeURIComponent(Api.token());
+  const _isImg = (n) => /\.(png|jpe?g|gif|webp|bmp|svg|heic)$/i.test(n || "");
+  const _isVid = (n) => /\.(mp4|mov|m4v|webm|avi|mkv|3gp|ogv)$/i.test(n || "");
+
+  function openMediaLightbox(url, isVideo) {
+    let el = document.getElementById("media-lightbox");
+    if (!el) {
+      el = document.createElement("div");
+      el.id = "media-lightbox";
+      el.innerHTML = `<button class="ml-close" aria-label="Close">${Icon("x", { size: 22 })}</button><div class="ml-content"></div>`;
+      document.body.appendChild(el);
+      const close = () => { el.classList.remove("show"); el.querySelector(".ml-content").innerHTML = ""; };
+      el.addEventListener("click", (e) => { if (e.target === el) close(); });
+      el.querySelector(".ml-close").addEventListener("click", close);
+      document.addEventListener("keydown", (e) => { if (e.key === "Escape") close(); });
+    }
+    el.querySelector(".ml-content").innerHTML = isVideo
+      ? `<video src="${url}" controls autoplay></video>`
+      : `<img src="${url}" alt="" />`;
+    el.classList.add("show");
+  }
+
+  async function loadMedia() {
+    const body = document.getElementById("media-body");
+    try {
+      const [files, audios] = await Promise.all([
+        Api.get(`/api/files?client_id=${clientId}`).catch(() => []),
+        Api.get(`/api/audio?client_id=${clientId}`).catch(() => []),
+      ]);
+      const images = [], videos = [], audioList = [], docs = [];
+      files.forEach((f) => {
+        if (f.content_type === "url") { docs.push({ name: f.filename, href: f.storage_key, isLink: true }); return; }
+        const url = `/api/files/${f.id}/download`;
+        if ((f.content_type || "").startsWith("image/") || _isImg(f.filename)) images.push({ name: f.filename, url });
+        else if ((f.content_type || "").startsWith("video/") || _isVid(f.filename)) videos.push({ name: f.filename, url });
+        else docs.push({ name: f.filename, url });
+      });
+      audios.forEach((a) => {
+        const url = `/api/audio/${a.id}/download`;
+        if ((a.content_type || "").startsWith("video/") || _isVid(a.filename)) videos.push({ name: a.filename, url });
+        else audioList.push({ name: a.filename, url });
+      });
+
+      if (!(images.length + videos.length + audioList.length + docs.length)) {
+        body.innerHTML = `<div class="empty"><span class="em-ico">${Icon("folderOpen", { size: 26 })}</span>No media has been shared in this conversation yet.</div>`;
+        return;
+      }
+
+      let html = "";
+      if (images.length || videos.length) {
+        html += `<div class="media-section"><h6>Photos &amp; Videos <span class="muted">(${images.length + videos.length})</span></h6><div class="media-grid">`;
+        images.forEach((m) => { html += `<button class="media-cell" data-img="${_tok(m.url)}" title="${esc(m.name)}"><img loading="lazy" src="${_tok(m.url)}" alt="" /></button>`; });
+        videos.forEach((m) => { html += `<button class="media-cell video" data-vid="${_tok(m.url)}" title="${esc(m.name)}"><video preload="metadata" src="${_tok(m.url)}#t=0.1"></video><span class="media-play"><svg width="20" height="20" viewBox="0 0 24 24" fill="#fff"><path d="M8 5v14l11-7z"/></svg></span></button>`; });
+        html += `</div></div>`;
+      }
+      if (audioList.length) {
+        html += `<div class="media-section"><h6>Audio <span class="muted">(${audioList.length})</span></h6><div class="media-list">`;
+        audioList.forEach((m) => { html += `<div class="media-row"><div class="mr-info"><div class="mr-name">${esc(m.name)}</div><audio controls preload="none" src="${_tok(m.url)}" style="width:100%;max-width:320px;height:34px;margin-top:6px"></audio></div></div>`; });
+        html += `</div></div>`;
+      }
+      if (docs.length) {
+        html += `<div class="media-section"><h6>Documents <span class="muted">(${docs.length})</span></h6><div class="media-list">`;
+        docs.forEach((m) => {
+          const href = m.isLink ? m.href : _tok(m.url);
+          const ext = m.isLink ? "LINK" : (m.name || "file").split(".").pop().toUpperCase().slice(0, 4);
+          html += `<a class="media-row doc" href="${esc(href)}" target="_blank" rel="noopener"><span class="doc-ic">${esc(ext)}</span><div class="mr-info"><div class="mr-name">${esc(m.name)}</div><div class="mr-sub">${m.isLink ? "Open link" : "Download"}</div></div>${Icon("download", { size: 15 })}</a>`;
+        });
+        html += `</div></div>`;
+      }
+      body.innerHTML = html;
+      body.querySelectorAll(".media-cell[data-img]").forEach((c) => c.addEventListener("click", () => openMediaLightbox(c.dataset.img, false)));
+      body.querySelectorAll(".media-cell[data-vid]").forEach((c) => c.addEventListener("click", () => openMediaLightbox(c.dataset.vid, true)));
+    } catch (e) {
+      body.innerHTML = `<div class="text-danger p-3">Could not load media: ${esc(e.message)}</div>`;
+    }
+  }
+
   // Lazy-load tabs on first show.
   const loaders = {
-    "tab-conv": loadConversations, "tab-proj": loadProjects,
+    "tab-conv": loadConversations, "tab-media": loadMedia, "tab-proj": loadProjects,
     "tab-files": loadFiles, "tab-audio": loadAudio, "tab-activity": loadActivity,
   };
   const loaded = {};
