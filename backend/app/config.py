@@ -28,6 +28,9 @@ class Settings(BaseSettings):
 
     database_url: str = "postgresql+psycopg2://neondb_owner:npg_xL3dj5gmAnsI@ep-super-heart-at950jsl.c-9.us-east-1.aws.neon.tech/neondb?sslmode=require"
     redis_url: str = "redis://localhost:6379/0"
+    # Seconds between DB keep-alive pings (prevents serverless-Postgres cold starts).
+    # Set to 0 to disable (e.g. to conserve Neon free-tier compute hours).
+    db_keepalive_seconds: int = 240
 
     # --- Initial super admin (seeded on first run) ---
     first_superadmin_email: str = "admin@devexhub.com"

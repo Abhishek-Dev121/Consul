@@ -3,14 +3,38 @@
 Mounts all API routers, serves the static HTML frontend, seeds the database on
 startup, and exposes a health check.
 """
+import asyncio
+import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from sqlalchemy import text
 
 from app.config import settings
+from app.database import engine
+
+_log = logging.getLogger("uvicorn.error")
+
+
+async def _db_keepalive():
+    """Ping the database every few minutes so a serverless Postgres (e.g. Neon)
+    doesn't auto-suspend its compute. Without this, the first request after an
+    idle period pays a multi-second cold-start ('the page gets stuck')."""
+    interval = settings.db_keepalive_seconds
+    while True:
+        await asyncio.sleep(interval)
+        try:
+            await asyncio.to_thread(_ping_db)
+        except Exception as e:  # noqa: BLE001 — keep the loop alive
+            _log.warning("DB keepalive ping failed: %s", e)
+
+
+def _ping_db():
+    with engine.connect() as conn:
+        conn.execute(text("SELECT 1"))
 from app.routers import (
     activities,
     ai,
@@ -36,7 +60,12 @@ FRONTEND_DIR = Path(__file__).resolve().parents[2] / "frontend"
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
-    yield
+    task = asyncio.create_task(_db_keepalive()) if settings.db_keepalive_seconds > 0 else None
+    try:
+        yield
+    finally:
+        if task:
+            task.cancel()
 
 
 app = FastAPI(title=settings.app_name, lifespan=lifespan)

@@ -38,6 +38,17 @@ def _accessible_clients(db: Session, user: User) -> list[Client]:
     ).scalars().all()
 
 
+def _accessible_client_meta(db: Session, user: User):
+    """Lightweight (id, name, company) rows for the accessible clients — a single
+    column query with NO relationship (assignees/channels) selectin loads. Use
+    this for aggregate pages that only need ids/names, to save round-trips on the
+    remote database."""
+    stmt = select(Client.id, Client.name, Client.company)
+    if not has_min_role(user, UserRole.admin):
+        stmt = stmt.join(Client.assignees).where(User.id == user.id)
+    return db.execute(stmt.order_by(Client.name)).all()
+
+
 def _sentiment_by_client(db: Session, conv_to_client: dict[int, int]) -> dict[int, str]:
     """Latest conversation-analysis sentiment per client."""
     out: dict[int, str] = {}
@@ -68,7 +79,7 @@ def _norm_sent(s: str | None) -> str:
 
 @router.get("/dashboard/overview")
 def dashboard_overview(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
-    clients = _accessible_clients(db, user)
+    clients = _accessible_client_meta(db, user)
     cids = [c.id for c in clients]
     cname = {c.id: c.name for c in clients}
     if not cids:
@@ -91,9 +102,17 @@ def dashboard_overview(db: Session = Depends(get_db), user: User = Depends(get_c
     audio_count = db.execute(
         select(func.count(AudioRecording.id)).where(AudioRecording.client_id.in_(cids))
     ).scalar_one()
+    # Count all projects, and pull only the top-6 columns for display — avoids
+    # loading every Project entity (which selectin-loads all their tasks +
+    # members: 2 extra round-trips the dashboard never uses).
+    projects_total = db.execute(
+        select(func.count(Project.id)).where(Project.client_id.in_(cids))
+    ).scalar_one()
     project_rows = db.execute(
-        select(Project).where(Project.client_id.in_(cids)).order_by(Project.created_at.desc())
-    ).scalars().all()
+        select(Project.id, Project.bitrix_project_id, Project.title, Project.client_id,
+               Project.status, Project.due_date)
+        .where(Project.client_id.in_(cids)).order_by(Project.created_at.desc()).limit(6)
+    ).all()
 
     # Query AIAnalysis once instead of twice
     conv_sent_rows = db.execute(
@@ -158,7 +177,7 @@ def dashboard_overview(db: Session = Depends(get_db), user: User = Depends(get_c
     # projects in flight (using single grouped query instead of fetching all ProjectTasks)
     task_counts = {}
     if project_rows:
-        pids = [p.id for p in project_rows[:6]]
+        pids = [p.id for p in project_rows]
         from sqlalchemy import case
         task_stats = db.execute(
             select(
@@ -172,7 +191,7 @@ def dashboard_overview(db: Session = Depends(get_db), user: User = Depends(get_c
         task_counts = {row.project_id: (row.total, row.done or 0) for row in task_stats}
 
     projects = []
-    for p in project_rows[:6]:
+    for p in project_rows:
         total, done = task_counts.get(p.id, (0, 0))
         progress = round(done / total * 100) if total else 0
         projects.append({
@@ -187,7 +206,7 @@ def dashboard_overview(db: Session = Depends(get_db), user: User = Depends(get_c
             "clients": len(clients),
             "conversations": len(convos),
             "calls": audio_count,
-            "projects": len(project_rows),
+            "projects": projects_total,
             "at_risk": at_risk,
         },
         "sentiment": tally,
@@ -273,7 +292,7 @@ def clients_overview(archived: bool = False, db: Session = Depends(get_db), user
 
 @router.get("/reports/overview")
 def reports_overview(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
-    clients = _accessible_clients(db, user)
+    clients = _accessible_client_meta(db, user)
     cids = [c.id for c in clients] or [-1]
     cname = {c.id: c.name for c in clients}
     now = datetime.now(timezone.utc)
@@ -360,20 +379,22 @@ def reports_overview(db: Session = Depends(get_db), user: User = Depends(get_cur
 
 @router.get("/overview/documents")
 def documents_overview(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
-    clients = _accessible_clients(db, user)
+    from app.models.project import Project
+    clients = _accessible_client_meta(db, user)
     cids = [c.id for c in clients] or [-1]
     cname = {c.id: c.name for c in clients}
-    uname = dict(db.execute(select(User.id, User.name)).all())
-    from app.models.project import Project
-    pname = {p.id: p.title for p in db.execute(select(Project.id, Project.title)).all()}
-    
+
+    # One join pulls file rows + uploader name + project title (was 3 queries).
     rows = db.execute(
-        select(FileRecord).where(FileRecord.client_id.in_(cids)).order_by(FileRecord.created_at.desc())
-    ).scalars().all()
-    
-    # Query AI analyses for these documents
+        select(FileRecord, User.name.label("by"), Project.title.label("proj"))
+        .outerjoin(User, FileRecord.uploaded_by == User.id)
+        .outerjoin(Project, FileRecord.project_id == Project.id)
+        .where(FileRecord.client_id.in_(cids))
+        .order_by(FileRecord.created_at.desc())
+    ).all()
+
     from app.models.ai_analysis import AIAnalysis, AnalysisTarget
-    fids = [f.id for f in rows] or [-1]
+    fids = [r[0].id for r in rows] or [-1]
     analyses = db.execute(
         select(AIAnalysis).where(
             AIAnalysis.target_type == AnalysisTarget.document,
@@ -381,39 +402,39 @@ def documents_overview(db: Session = Depends(get_db), user: User = Depends(get_c
         )
     ).scalars().all()
     analysis_map = {a.target_id: {
-        "id": a.id,
-        "summary": a.summary,
-        "key_points": a.key_points,
-        "pending_actions": a.pending_actions,
-        "follow_ups": a.follow_ups,
-        "sentiment": a.sentiment,
-        "sentiment_score": a.sentiment_score,
-        "model": a.model,
+        "id": a.id, "summary": a.summary, "key_points": a.key_points,
+        "pending_actions": a.pending_actions, "follow_ups": a.follow_ups,
+        "sentiment": a.sentiment, "sentiment_score": a.sentiment_score, "model": a.model,
     } for a in analyses}
-    
+
     return [{
         "id": f.id, "filename": f.filename, "content_type": f.content_type, "size": f.size,
         "client": cname.get(f.client_id, "—"), "client_id": f.client_id,
-        "project_id": f.project_id, "project_title": pname.get(f.project_id, "—"),
-        "by": uname.get(f.uploaded_by, "—"),
+        "project_id": f.project_id, "project_title": proj or "—",
+        "by": by or "—",
         "created_at": f.created_at.isoformat() if f.created_at else None,
         "analysis": analysis_map.get(f.id),
-    } for f in rows]
+    } for f, by, proj in rows]
 
 
 @router.get("/overview/calls")
 def calls_overview(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
-    clients = _accessible_clients(db, user)
+    from app.models.project import Project
+    clients = _accessible_client_meta(db, user)
     cids = [c.id for c in clients] or [-1]
     cname = {c.id: c.name for c in clients}
-    uname = dict(db.execute(select(User.id, User.name)).all())
-    from app.models.project import Project
-    pname = {p.id: p.title for p in db.execute(select(Project.id, Project.title)).all()}
-    
-    rows = db.execute(
-        select(AudioRecording).where(AudioRecording.client_id.in_(cids))
+
+    # One join pulls audio rows + uploader name + project title (was 3 queries).
+    rows_j = db.execute(
+        select(AudioRecording, User.name.label("by"), Project.title.label("proj"))
+        .outerjoin(User, AudioRecording.uploaded_by == User.id)
+        .outerjoin(Project, AudioRecording.project_id == Project.id)
+        .where(AudioRecording.client_id.in_(cids))
         .order_by(AudioRecording.created_at.desc())
-    ).scalars().all()
+    ).all()
+    rows = [r[0] for r in rows_j]
+    by_of = {r[0].id: r.by for r in rows_j}
+    proj_of = {r[0].id: r.proj for r in rows_j}
     # latest analysis per audio
     analyses = {}
     if rows:
@@ -429,8 +450,8 @@ def calls_overview(db: Session = Depends(get_db), user: User = Depends(get_curre
         out.append({
             "id": r.id, "filename": r.filename, "duration": r.duration,
             "client": cname.get(r.client_id, "—"), "client_id": r.client_id,
-            "project_id": r.project_id, "project_title": pname.get(r.project_id, "—"),
-            "by": uname.get(r.uploaded_by, "—"),
+            "project_id": r.project_id, "project_title": proj_of.get(r.id) or "—",
+            "by": by_of.get(r.id) or "—",
             "created_at": r.created_at.isoformat() if r.created_at else None,
             "analysis": None if not a else {
                 "summary": a.summary, "key_points": a.key_points, "pending_actions": a.pending_actions,
