@@ -1,0 +1,26 @@
+- [ ] **Phase 1: Database & Authentication**
+  - [ ] Create `backend/app/models/chat.py` with models (`Chat`, `ChatParticipant`, `ChatMessage`, `MessageStatus`) and DB indexes
+  - [ ] Update `backend/app/seed.py` to import chat models
+  - [ ] Add `/signup` API endpoint in `backend/app/routers/auth.py`
+- [ ] **Phase 2: REST APIs for History & Chats**
+  - [ ] Create `backend/app/routers/chats.py` with endpoints (`GET /api/chats`, `GET /api/chats/:chatId/messages`, `POST /api/chats`)
+  - [ ] Mount the chats router in `backend/app/main.py`
+- [ ] **Phase 3: Real-Time WebSocket Engine**
+  - [ ] Create `backend/app/services/websocket_manager.py` with `ConnectionManager` supporting Redis Pub/Sub fallback
+  - [ ] Mount `/ws/chat` route in `backend/app/main.py`
+- [ ] **Phase 4: File & Media Sharing**
+  - [ ] Add S3 pre-signed URL / Cloudinary upload signature or local direct upload mockup in `chats.py`
+  - [ ] Mount the `/chat-uploads` static file path in `backend/app/main.py`
+  - [ ] Handle media message type classification in websocket manager
+- [ ] **Phase 5: Read Receipts & mark_seen**
+  - [ ] Implement `mark_seen` WebSocket handler and `read_update` broadcast
+  - [ ] Add `GET /api/messages/:messageId/viewers` endpoint in `chats.py`
+- [ ] **Phase 6: AI Chat Analysis**
+  - [ ] Add `POST /api/chats/:chatId/analyze` using OpenAI client in `chats.py`
+- [ ] **Phase 7: Frontend Integration (UI Logic)**
+  - [ ] Create `frontend/chat_page.html` UI
+  - [ ] Create `frontend/js/chat_page.js` with client-side WebSocket, infinite scroll, Mark as Seen, typing indicator, AI modal
+  - [ ] Add "Team Chat" item to navbar in `frontend/js/layout.js`
+- [ ] **Phase 8: Verification**
+  - [ ] Write tests in `backend/tests/test_chat.py`
+  - [ ] Run pytest suite and verify correctness
