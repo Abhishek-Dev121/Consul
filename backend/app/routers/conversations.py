@@ -35,7 +35,8 @@ def list_conversations(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    stmt = select(Conversation).order_by(Conversation.created_at.desc())
+    from sqlalchemy.orm import selectinload
+    stmt = select(Conversation).options(selectinload(Conversation.notes)).order_by(Conversation.created_at.desc())
     stmt = stmt.where(Conversation.is_deleted.is_(False if is_deleted is None else is_deleted))
     if client_id:
         stmt = stmt.where(Conversation.client_id == client_id)

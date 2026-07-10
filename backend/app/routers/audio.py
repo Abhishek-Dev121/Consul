@@ -95,7 +95,10 @@ def download_audio(audio_id: int, request: Request, db: Session = Depends(get_db
     if not rec:
         raise HTTPException(status_code=404, detail="Audio not found")
     ensure_client_access(user, _client(db, rec.client_id))
-    data = storage_service.read_bytes(rec.storage_key)
+    try:
+        data = storage_service.read_bytes(rec.storage_key)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Audio file not found in storage. It may have been uploaded in a different environment.")
     # Videos are stored as AudioRecording too — derive the real type from the
     # filename so a .mp4 isn't served as audio (which stops it playing).
     return storage_service.range_response(
@@ -115,7 +118,10 @@ def analyze_audio(audio_id: int, db: Session = Depends(get_db), actor: User = De
     ensure_client_access(actor, _client(db, rec.client_id))
     ensure_can_write(actor)
 
-    audio_bytes = storage_service.read_bytes(rec.storage_key)
+    try:
+        audio_bytes = storage_service.read_bytes(rec.storage_key)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Audio file not found in storage. Please upload the file again.")
     try:
         tr = deepgram_service.transcribe(audio_bytes, rec.content_type)
     except RuntimeError as e:

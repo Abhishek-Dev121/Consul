@@ -151,7 +151,10 @@ def download_file(file_id: int, request: Request, db: Session = Depends(get_db),
     if not rec:
         raise HTTPException(status_code=404, detail="File not found")
     ensure_client_access(user, _client(db, rec.client_id))
-    data = storage_service.read_bytes(rec.storage_key)
+    try:
+        data = storage_service.read_bytes(rec.storage_key)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="File not found in storage. It may have been uploaded in a different environment.")
     ctype = storage_service.guess_content_type(rec.filename, rec.content_type)
     # Preview inline for media/pdf/text (by resolved MIME or extension), else download.
     ext = rec.filename.lower()
@@ -202,7 +205,10 @@ def analyze_file(
         from app.services.document_parser_service import extract_url_text
         text = extract_url_text(rec.storage_key)
     else:
-        file_bytes = storage_service.read_bytes(rec.storage_key)
+        try:
+            file_bytes = storage_service.read_bytes(rec.storage_key)
+        except FileNotFoundError:
+            raise HTTPException(status_code=404, detail="File not found in storage. Please upload the file again.")
         from app.services.document_parser_service import extract_text
         text = extract_text(file_bytes, rec.filename, rec.content_type)
         
