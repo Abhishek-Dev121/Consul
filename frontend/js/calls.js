@@ -41,6 +41,9 @@
     }).join("") : `<div class="empty"><span class="em-ico">${Icon('phone', { size: 24 })}</span>No call recordings yet inside this folder. Upload one using the button above.</div>`;
   }
 
+  let page = 1;
+  const pageSize = 10;
+
   function render() {
     const folderCounts = {};
     clientsList.forEach(c => {
@@ -89,6 +92,22 @@
       ? calls 
       : calls.filter(c => c.client === activeClientFolder);
 
+    const totalPages = Math.ceil(filteredCalls.length / pageSize) || 1;
+    if (page > totalPages) page = totalPages;
+    const paginated = filteredCalls.slice((page - 1) * pageSize, page * pageSize);
+
+    let pagerHtml = "";
+    if (filteredCalls.length > pageSize) {
+      pagerHtml = `
+        <div class="d-flex justify-content-between align-items-center mt-3 pt-3 border-top" style="width: 100%;">
+          <span class="muted small">Showing ${(page - 1) * pageSize + 1}-${Math.min(page * pageSize, filteredCalls.length)} of ${filteredCalls.length} recordings</span>
+          <div class="btn-group">
+            <button class="btn btn-sm btn-soft" id="calls-prev" ${page <= 1 ? "disabled" : ""}>← Prev</button>
+            <button class="btn btn-sm btn-soft" id="calls-next" ${page >= totalPages ? "disabled" : ""}>Next →</button>
+          </div>
+        </div>`;
+    }
+
     document.getElementById("view").innerHTML = `
       <div class="page-head">
         <div>
@@ -106,12 +125,21 @@
       <h3 class="mb-3" style="font-size:15px; font-family:var(--display); color:var(--ink)">
         ${activeClientFolder === 'all' ? 'All Recordings' : esc(activeClientFolder) + ' Recordings'}
       </h3>
-      <div style="display:flex;flex-direction:column;gap:16px">${list(filteredCalls)}</div>
+      <div style="display:flex;flex-direction:column;gap:16px">
+        ${list(paginated)}
+        ${pagerHtml}
+      </div>
     `;
+
+    const prevBtn = document.getElementById("calls-prev");
+    const nextBtn = document.getElementById("calls-next");
+    if (prevBtn) prevBtn.addEventListener("click", () => { page--; render(); });
+    if (nextBtn) nextBtn.addEventListener("click", () => { page++; render(); });
   }
 
   window.selectFolder = (folderName) => {
     activeClientFolder = folderName;
+    page = 1;
     render();
   };
 

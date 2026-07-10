@@ -13,6 +13,33 @@ const BASE_URL = (location.hostname === "localhost" || location.hostname === "12
   ? "http://127.0.0.1:8000"
   : "";
 
+// ─── Frontend API response cache (stale-while-revalidate) ──────────────────
+// GET responses are cached in sessionStorage for 30 s.
+// On the next request: if cached data exists, return it INSTANTLY and then
+// refresh it in the background — so the UI never waits for the network.
+const _apiCache = {
+  TTL_MS: 30_000,
+  _key(path) { return "apicache:" + path; },
+  get(path) {
+    try {
+      const raw = sessionStorage.getItem(this._key(path));
+      if (!raw) return null;
+      const { ts, data } = JSON.parse(raw);
+      if (Date.now() - ts > this.TTL_MS) { sessionStorage.removeItem(this._key(path)); return null; }
+      return data;
+    } catch { return null; }
+  },
+  set(path, data) {
+    try { sessionStorage.setItem(this._key(path), JSON.stringify({ ts: Date.now(), data })); } catch { /* quota full */ }
+  },
+  del(path) { try { sessionStorage.removeItem(this._key(path)); } catch {} },
+  clear() {
+    try {
+      Object.keys(sessionStorage).filter(k => k.startsWith("apicache:")).forEach(k => sessionStorage.removeItem(k));
+    } catch {}
+  },
+};
+
 // Global top-of-page progress bar: gives instant visual feedback on every API
 // call so the app feels responsive even while a request is in flight. A short
 // show-delay avoids flashing it for near-instant requests.
@@ -64,6 +91,7 @@ const Api = {
       const res = await fetch(targetPath, { method, headers, body: payload });
       if (res.status === 401) {
         Api.clearToken();
+        _apiCache.clear();
         if (!location.pathname.endsWith("/login")) location.href = "/login";
         throw new Error("Unauthorized");
       }
@@ -93,10 +121,25 @@ const Api = {
     }
   },
 
-  get(p) { return this.request("GET", p); },
-  post(p, b) { return this.request("POST", p, b); },
-  patch(p, b) { return this.request("PATCH", p, b); },
-  del(p) { return this.request("DELETE", p); },
+  // Stale-while-revalidate GET: returns cached data immediately if available,
+  // fires a background fetch to refresh the cache for next time.
+  async get(p, { stale = true } = {}) {
+    if (stale) {
+      const cached = _apiCache.get(p);
+      if (cached !== null) {
+        // Background refresh — don't await
+        this.request("GET", p).then(fresh => _apiCache.set(p, fresh)).catch(() => {});
+        return cached;
+      }
+    }
+    const data = await this.request("GET", p);
+    _apiCache.set(p, data);
+    return data;
+  },
+  // Mutating requests invalidate the relevant cache path
+  async post(p, b) { const r = await this.request("POST", p, b); _apiCache.del(p); return r; },
+  async patch(p, b) { const r = await this.request("PATCH", p, b); _apiCache.del(p); return r; },
+  async del(p) { const r = await this.request("DELETE", p); _apiCache.del(p); return r; },
 
   async postForm(p, formData) {
     return this.request("POST", p, formData, true);
@@ -115,6 +158,7 @@ const Api = {
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.detail || "Login failed");
+      _apiCache.clear();
       this.setToken(data.access_token, remember);
       return data;
     } finally {

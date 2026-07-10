@@ -172,3 +172,46 @@ function renderAnalysis(a) {
     ${a.transcript ? `<div class="mt-3"><strong>Transcript</strong><div class="chat-log mt-1">${esc(a.transcript)}</div></div>` : ""}
     <p class="muted small mt-2 mb-0">Model: ${esc(a.model || "—")} · ${fmtDate(a.created_at)}</p>`;
 }
+
+// Generates professional modern skeleton loaders for page views
+function skeletonLoader(type) {
+  if (type === "table" || type === "list") {
+    return `
+      <div style="padding: 16px;">
+        <div class="skeleton" style="height: 35px; width: 100%; margin-bottom: 15px; border-radius: 6px;"></div>
+        <div class="skeleton" style="height: 25px; width: 95%; margin-bottom: 12px; border-radius: 6px;"></div>
+        <div class="skeleton" style="height: 25px; width: 90%; margin-bottom: 12px; border-radius: 6px;"></div>
+        <div class="skeleton" style="height: 25px; width: 97%; margin-bottom: 12px; border-radius: 6px;"></div>
+        <div class="skeleton" style="height: 25px; width: 85%; margin-bottom: 12px; border-radius: 6px;"></div>
+        <div class="skeleton" style="height: 25px; width: 92%; margin-bottom: 12px; border-radius: 6px;"></div>
+      </div>`;
+  }
+  if (type === "cards") {
+    return `
+      <div class="grid g-4" style="grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); padding: 8px;">
+        <div class="skeleton" style="height: 180px; border-radius: 12px;"></div>
+        <div class="skeleton" style="height: 180px; border-radius: 12px;"></div>
+        <div class="skeleton" style="height: 180px; border-radius: 12px;"></div>
+        <div class="skeleton" style="height: 180px; border-radius: 12px;"></div>
+        <div class="skeleton" style="height: 180px; border-radius: 12px;"></div>
+        <div class="skeleton" style="height: 180px; border-radius: 12px;"></div>
+      </div>`;
+  }
+  if (type === "reports") {
+    return `
+      <div style="padding: 8px;">
+        <div class="row g-3 mb-4">
+          <div class="col-md-3 col-6"><div class="skeleton" style="height:100px;border-radius:12px"></div></div>
+          <div class="col-md-3 col-6"><div class="skeleton" style="height:100px;border-radius:12px"></div></div>
+          <div class="col-md-3 col-6"><div class="skeleton" style="height:100px;border-radius:12px"></div></div>
+          <div class="col-md-3 col-6"><div class="skeleton" style="height:100px;border-radius:12px"></div></div>
+        </div>
+        <div class="row g-3">
+          <div class="col-md-8"><div class="skeleton" style="height:320px;border-radius:14px"></div></div>
+          <div class="col-md-4"><div class="skeleton" style="height:320px;border-radius:14px"></div></div>
+        </div>
+      </div>`;
+  }
+  return `<div class="skeleton" style="height: 200px; border-radius: 8px;"></div>`;
+}
+

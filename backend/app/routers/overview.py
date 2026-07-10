@@ -9,6 +9,8 @@ from fastapi import APIRouter, Depends
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.cache import ttl_cache
+
 from app.database import get_db
 from app.deps import get_current_user
 from app.models.activity import Activity
@@ -79,6 +81,10 @@ def _norm_sent(s: str | None) -> str:
 
 @router.get("/dashboard/overview")
 def dashboard_overview(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    cache_key = f"dashboard:{user.id}"
+    cached = ttl_cache.get(cache_key)
+    if cached is not None:
+        return cached
     clients = _accessible_client_meta(db, user)
     cids = [c.id for c in clients]
     cname = {c.id: c.name for c in clients}
@@ -215,12 +221,17 @@ def dashboard_overview(db: Session = Depends(get_db), user: User = Depends(get_c
         "recent_activity": recent,
         "projects_in_flight": projects,
     }
+    ttl_cache.set(cache_key, result, ttl=30)
+    return result
 
 
 @router.get("/overview/clients")
 def clients_overview(archived: bool = False, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    cache_key = f"clients:{user.id}:{archived}"
+    cached = ttl_cache.get(cache_key)
+    if cached is not None:
+        return cached
     from sqlalchemy import literal, union_all
-
     clients = _accessible_clients(db, user)
     cids = [c.id for c in clients] or [-1]
 
@@ -287,6 +298,7 @@ def clients_overview(archived: bool = False, db: Session = Depends(get_db), user
                 "projects": projects.get(c.id, 0), "docs": docs.get(c.id, 0),
             },
         })
+    ttl_cache.set(cache_key, out, ttl=30)
     return out
 
 
@@ -380,6 +392,10 @@ def reports_overview(db: Session = Depends(get_db), user: User = Depends(get_cur
 @router.get("/overview/documents")
 def documents_overview(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     from app.models.project import Project
+    cache_key = f"documents:{user.id}"
+    cached = ttl_cache.get(cache_key)
+    if cached is not None:
+        return cached
     clients = _accessible_client_meta(db, user)
     cids = [c.id for c in clients] or [-1]
     cname = {c.id: c.name for c in clients}
@@ -407,7 +423,7 @@ def documents_overview(db: Session = Depends(get_db), user: User = Depends(get_c
         "sentiment": a.sentiment, "sentiment_score": a.sentiment_score, "model": a.model,
     } for a in analyses}
 
-    return [{
+    result = [{
         "id": f.id, "filename": f.filename, "content_type": f.content_type, "size": f.size,
         "client": cname.get(f.client_id, "—"), "client_id": f.client_id,
         "project_id": f.project_id, "project_title": proj or "—",
@@ -415,11 +431,17 @@ def documents_overview(db: Session = Depends(get_db), user: User = Depends(get_c
         "created_at": f.created_at.isoformat() if f.created_at else None,
         "analysis": analysis_map.get(f.id),
     } for f, by, proj in rows]
+    ttl_cache.set(cache_key, result, ttl=30)
+    return result
 
 
 @router.get("/overview/calls")
 def calls_overview(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     from app.models.project import Project
+    cache_key = f"calls:{user.id}"
+    cached = ttl_cache.get(cache_key)
+    if cached is not None:
+        return cached
     clients = _accessible_client_meta(db, user)
     cids = [c.id for c in clients] or [-1]
     cname = {c.id: c.name for c in clients}
@@ -458,4 +480,5 @@ def calls_overview(db: Session = Depends(get_db), user: User = Depends(get_curre
                 "sentiment": _norm_sent(a.sentiment), "behavioral_assessment": a.behavioral_assessment,
             },
         })
+    ttl_cache.set(cache_key, out, ttl=30)
     return out

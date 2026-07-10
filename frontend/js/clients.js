@@ -33,16 +33,45 @@
     </div>`;
   }
 
+  let page = 1;
+  const pageSize = 10;
+
   function renderGrid() {
     const list = clients.filter((c) => chanFilter === "all" || c.channels.some((ch) => ch.platform === chanFilter));
+    const totalPages = Math.ceil(list.length / pageSize) || 1;
+    if (page > totalPages) page = totalPages;
+    const paginated = list.slice((page - 1) * pageSize, page * pageSize);
+
     const grid = document.getElementById("grid");
-    grid.innerHTML = list.length ? list.map(card).join("")
+    let html = paginated.length ? paginated.map(card).join("")
       : `<div class="empty" style="grid-column:1/-1"><span class="em-ico">${Icon("users", { size: 24 })}</span>No clients on this channel.</div>`;
+
+    if (list.length > pageSize) {
+      html += `
+        <div class="d-flex justify-content-between align-items-center mt-4 pt-3 border-top" style="grid-column: 1 / -1; width: 100%;">
+          <span class="muted small">Showing ${(page - 1) * pageSize + 1}-${Math.min(page * pageSize, list.length)} of ${list.length} clients</span>
+          <div class="btn-group">
+            <button class="btn btn-sm btn-soft" id="grid-prev" ${page <= 1 ? "disabled" : ""}>← Prev</button>
+            <button class="btn btn-sm btn-soft" id="grid-next" ${page >= totalPages ? "disabled" : ""}>Next →</button>
+          </div>
+        </div>`;
+    }
+
+    grid.innerHTML = html;
     document.querySelectorAll(".client-card").forEach((el) =>
       el.addEventListener("click", () => openDrawer(parseInt(el.dataset.id))));
+
+    const prevBtn = document.getElementById("grid-prev");
+    const nextBtn = document.getElementById("grid-next");
+    if (prevBtn) prevBtn.addEventListener("click", () => { page--; renderGrid(); });
+    if (nextBtn) nextBtn.addEventListener("click", () => { page++; renderGrid(); });
   }
 
-  async function load() { clients = await Api.get("/api/overview/clients"); renderGrid(); }
+  async function load() { 
+    clients = await Api.get("/api/overview/clients"); 
+    page = 1;
+    renderGrid(); 
+  }
 
   // ---- drawer ----
   async function openDrawer(id) {
