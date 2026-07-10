@@ -7,7 +7,6 @@ const NAV = [
     { href: "/dashboard", label: "Dashboard", icon: "home", min: "employee" },
     { href: "/clients", label: "Clients", icon: "users", min: "employee" },
     { href: "/conversations", label: "Conversations", icon: "message", min: "employee" },
-    { href: "/team-chat", label: "Team Chat", icon: "message", min: "employee" },
     { href: "/projects", label: "Projects", icon: "folder", min: "employee" },
   ]},
   { section: "Records", items: [
