@@ -2,10 +2,9 @@ import enum
 from datetime import datetime
 
 from sqlalchemy import DateTime, Enum, Integer, String, Text, func
-from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.database import Base
+from app.database import Base, JSONColumn
 
 
 class AnalysisTarget(str, enum.Enum):
@@ -24,12 +23,12 @@ class AIAnalysis(Base):
     target_id: Mapped[int] = mapped_column(Integer, index=True)
 
     summary: Mapped[str | None] = mapped_column(Text)
-    key_points: Mapped[list] = mapped_column(JSONB, default=list)
-    pending_actions: Mapped[list] = mapped_column(JSONB, default=list)
-    follow_ups: Mapped[list] = mapped_column(JSONB, default=list)
+    key_points: Mapped[list] = mapped_column(JSONColumn, default=list)
+    pending_actions: Mapped[list] = mapped_column(JSONColumn, default=list)
+    follow_ups: Mapped[list] = mapped_column(JSONColumn, default=list)
     sentiment: Mapped[str | None] = mapped_column(String(64))
     sentiment_score: Mapped[float | None] = mapped_column()
-    response_metrics: Mapped[dict] = mapped_column(JSONB, default=dict)
+    response_metrics: Mapped[dict] = mapped_column(JSONColumn, default=dict)
 
     # Audio-specific
     transcript: Mapped[str | None] = mapped_column(Text)

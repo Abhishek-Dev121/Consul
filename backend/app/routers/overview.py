@@ -207,7 +207,25 @@ def dashboard_overview(db: Session = Depends(get_db), user: User = Depends(get_c
             "due": p.due_date.isoformat() if p.due_date else None,
         })
 
-    return {
+    # Drill-down for the sentiment panel. Built from `conv_sent`, the same map the
+    # tally is counted from, so each bucket matches its headline number exactly.
+    # No extra queries: every value here is already in memory.
+    sentiment_conversations: dict[str, list[dict]] = {"pos": [], "neu": [], "neg": []}
+    for c in convos:
+        s = conv_sent.get(c.id)
+        if s is None:
+            continue  # never analyzed -> not counted in the tally either
+        plat = conv_platform.get(c.id)
+        sentiment_conversations[s].append({
+            "id": c.id,
+            "client_id": c.client_id,
+            "client": cname.get(c.client_id, "—"),
+            "title": c.title or "Untitled",
+            "platform": plat.value if plat else "other",
+            "time": c.created_at.isoformat() if c.created_at else None,
+        })
+
+    result = {
         "kpis": {
             "clients": len(clients),
             "conversations": len(convos),
@@ -216,6 +234,7 @@ def dashboard_overview(db: Session = Depends(get_db), user: User = Depends(get_c
             "at_risk": at_risk,
         },
         "sentiment": tally,
+        "sentiment_conversations": sentiment_conversations,
         "channel_volume": [{"platform": k, "count": v} for k, v in sorted(vol.items(), key=lambda x: -x[1])],
         "attention": attention,
         "recent_activity": recent,

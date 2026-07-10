@@ -1,7 +1,13 @@
 (async function () {
+  // Matches the Call Recordings page: no top-bar search (the page has its own
+  // filter toolbar) and no upload button (files and links are added from a
+  // client's profile page).
+  await renderLayout("/documents", "Documents", {
+    crumb: "Contracts, specs & project files",
+    hideSearch: true,
+    hideActions: true,
+  });
   const writable = canWrite();
-  const actions = writable ? `<button class="btn btn-primary" id="upload-btn" data-bs-toggle="modal" data-bs-target="#uploadModal">${Icon('upload', { size: 14 })} Upload document</button>` : "";
-  await renderLayout("/documents", "Documents", { crumb: "Contracts, specs & project files", actions });
 
   function typeOf(name, ct, key) {
     if (ct === "url") {
@@ -9,7 +15,7 @@
       if (url.includes("sheet") || url.includes("excel")) return { t: "XLS", c: "#1F9D6B", cat: "Spreadsheet" };
       if (url.includes("doc") || url.includes("word") || url.includes("document")) return { t: "DOC", c: "#2C5AB8", cat: "Document" };
       if (url.includes("slide") || url.includes("presentation") || url.includes("ppt")) return { t: "PPT", c: "#E2574C", cat: "Presentation" };
-      return { t: "LINK", c: "#0E8C8C", cat: "Link" };
+      return { t: "LINK", c: "#2E6BFF", cat: "Link" };
     }
     const ext = (name.split(".").pop() || "").toLowerCase();
     if (ext === "pdf" || (ct || "").includes("pdf")) return { t: "PDF", c: "#D2473D", cat: "Document" };
@@ -22,280 +28,268 @@
   }
   const size = (b) => (b ? (b > 1e6 ? (b / 1e6).toFixed(1) + " MB" : (b / 1024).toFixed(0) + " KB") : "—");
 
-  let docs = [], cat = "All", activeClientFolder = "all";
+  // The documents overview returns the raw sentiment string ("Positive", "neutral",
+  // …), unlike the calls overview which normalises server-side. Normalise here so
+  // sentPill() always receives one of pos | neu | neg.
+  const normSent = (s) => {
+    s = (s || "").toLowerCase();
+    return s.includes("pos") ? "pos" : s.includes("neg") ? "neg" : "neu";
+  };
+
+  // ── State ──────────────────────────────────────────────────────────────
+  let docs = [];
+  let openClientId = null;      // null = folder grid, otherwise folder detail
+  let filterClientId = null;    // narrows the grid; does NOT open the folder
+  let searchQ = "";
+  let sortMode = "recent";      // recent | name | count
+  let cat = "All";              // type filter, only inside a folder
   let page = 1;
   const pageSize = 10;
+  const DAY = 86400000;
+  const CATS = ["All", "Document", "Image", "Spreadsheet", "Presentation", "Link", "File"];
 
-  function render() {
-    const cats = ["All", "Document", "Image", "Spreadsheet", "Presentation", "Link", "File"];
-    
-    // Group files by client folders
-    const folderCounts = {};
-    docs.forEach((d) => {
-      folderCounts[d.client] = (folderCounts[d.client] || 0) + 1;
-    });
-    const uniqueClients = Object.keys(folderCounts).sort();
+  // ── Folders derived from the documents themselves ──────────────────────
+  // `/api/overview/documents` returns newest-first, so the first row per client
+  // is its most recent file.
+  function buildFolders() {
+    const map = new Map();
+    for (const d of docs) {
+      let f = map.get(d.client_id);
+      if (!f) {
+        f = { client_id: d.client_id, name: d.client, count: 0, analyzed: 0, bytes: 0, latest: null };
+        map.set(d.client_id, f);
+      }
+      f.count += 1;
+      if (d.analysis) f.analyzed += 1;
+      f.bytes += d.size || 0;
+      const t = d.created_at ? new Date(d.created_at).getTime() : 0;
+      if (t && (f.latest === null || t > f.latest)) f.latest = t;
+    }
+    return [...map.values()];
+  }
 
-    const allActive = activeClientFolder === "all";
-    const allFolderHtml = `
-      <div class="card p-3 d-flex flex-row align-items-center gap-3 folder-card ${allActive ? 'border-primary bg-primary-subtle' : ''}" 
-           style="cursor:pointer; width:220px; flex-shrink:0; border-radius:10px" 
-           onclick="window.selectFolder('all')">
-        <div class="folder-icon text-primary" style="font-size:24px">${Icon('folder', { size: 20 })}</div>
-        <div style="min-width:0; flex:1">
-          <strong style="font-size:13.5px; display:block">All Folders</strong>
-          <span class="text-muted" style="font-size:11.5px">${docs.length} files</span>
-        </div>
-      </div>`;
+  function visibleFolders() {
+    const q = searchQ.trim().toLowerCase();
+    let out = buildFolders().filter((f) =>
+      (filterClientId === null || f.client_id === filterClientId) &&
+      (!q || f.name.toLowerCase().includes(q)));
+    if (sortMode === "name") out.sort((a, b) => a.name.localeCompare(b.name));
+    else if (sortMode === "count") out.sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
+    else out.sort((a, b) => (b.latest || 0) - (a.latest || 0));   // latest updated first
+    return out;
+  }
 
-    const foldersHtml = uniqueClients.map(cName => {
-      const count = folderCounts[cName];
-      const isActive = cName === activeClientFolder;
-      return `
-        <div class="card p-3 d-flex flex-row align-items-center gap-3 folder-card ${isActive ? 'border-primary bg-primary-subtle' : ''}" 
-             style="cursor:pointer; width:220px; flex-shrink:0; border-radius:10px" 
-             onclick="window.selectFolder('${esc(cName)}')">
-          <div class="folder-icon text-warning" style="font-size:24px">${Icon('folder', { size: 20 })}</div>
-          <div style="min-width:0; flex:1">
-            <strong style="font-size:13.5px; display:block; white-space:nowrap; overflow:hidden; text-overflow:ellipsis">${esc(cName)}</strong>
-            <span class="text-muted" style="font-size:11.5px">${count} file${count === 1 ? '' : 's'}</span>
+  // ── Document card ──────────────────────────────────────────────────────
+  function docCard(d) {
+    const ty = typeOf(d.filename, d.content_type, d.storage_key);
+    const href = d.content_type === "url" ? d.storage_key : `/api/files/${d.id}/download`;
+
+    let aiButton = "", analysisBox = "";
+    if (d.analysis) {
+      const a = d.analysis;
+      aiButton = `<button class="btn btn-soft btn-sm doc-ai-btn" data-ai="${d.id}">${Icon('sparkles', { size: 13 })} AI</button>`;
+      const keyPoints = (a.key_points || []).map((p) => `<li>${esc(p)}</li>`).join("");
+      const acts = (a.pending_actions || []).map((p) => `<li>${esc(p)}</li>`).join("");
+      analysisBox = `<div class="doc-ai-box" id="ai-box-${d.id}" hidden>
+          <div class="dab-head">
+            <strong>${Icon('sparkles', { size: 13 })} AI analysis</strong>
+            ${sentPill(normSent(a.sentiment))}
+          </div>
+          <p class="dab-sum">${esc(a.summary || "No summary available.")}</p>
+          <div class="dab-cols">
+            <div><div class="dab-lab">Key points</div><ul class="ai-list">${keyPoints || "<li class='muted'>—</li>"}</ul></div>
+            <div><div class="dab-lab">Pending actions</div><ul class="ai-list todo">${acts || "<li class='muted'>—</li>"}</ul></div>
           </div>
         </div>`;
-    }).join("");
+    } else if (writable) {
+      aiButton = `<button class="btn btn-soft btn-sm doc-run-btn" data-run="${d.id}">${Icon('bot', { size: 13 })} Analyze</button>`;
+    }
 
-    const filteredDocs = activeClientFolder === "all" ? docs : docs.filter(d => d.client === activeClientFolder);
-    const list = filteredDocs.filter((d) => cat === "All" || typeOf(d.filename, d.content_type, d.storage_key).cat === cat);
+    return `<div class="doc-card2">
+      <div class="dc-top">
+        <span class="doc-ic" style="background:${ty.c}">${ty.t}</span>
+        <div class="dc-body">
+          <a class="dc-name" href="${esc(href)}" target="_blank" rel="noopener" title="${esc(d.filename)}">${esc(d.filename)}</a>
+          <div class="dc-meta">${ty.cat}${d.content_type === "url" ? "" : ` · ${size(d.size)}`}</div>
+          <div class="dc-sub">
+            ${esc(d.client)}
+            ${d.project_title && d.project_title !== "—" ? `<span class="chip">${Icon('folder', { size: 11 })} ${esc(d.project_title)}</span>` : ""}
+          </div>
+          <div class="dc-foot">${esc(d.by)} · ${d.created_at ? fmtDate(d.created_at) : ""}</div>
+        </div>
+        <div class="dc-actions">${aiButton}</div>
+      </div>
+      ${analysisBox}
+    </div>`;
+  }
+
+  // ── Views ──────────────────────────────────────────────────────────────
+  function toolbar(folders) {
+    const all = buildFolders().sort((a, b) => a.name.localeCompare(b.name));
+    return `<div class="page-toolbar">
+      <div class="tb-field">
+        <span class="fi">${Icon("search", { size: 15 })}</span>
+        <input class="form-control" id="folder-search" type="search" autocomplete="off"
+               placeholder="Search a person by name…" value="${esc(searchQ)}" aria-label="Search folders by client name" />
+        ${searchQ ? `<button class="clear" id="folder-search-clear" title="Clear search" aria-label="Clear search">${Icon("x", { size: 14 })}</button>` : ""}
+      </div>
+      <select class="form-select tb-select" id="client-filter" aria-label="Filter folders by client">
+        <option value="">All clients</option>
+        ${all.map((f) => `<option value="${f.client_id}"${filterClientId === f.client_id ? " selected" : ""}>${esc(f.name)} (${f.count})</option>`).join("")}
+      </select>
+      <select class="form-select tb-select" id="sort-filter" aria-label="Sort folders" style="flex:0 1 190px">
+        <option value="recent"${sortMode === "recent" ? " selected" : ""}>Recently updated</option>
+        <option value="name"${sortMode === "name" ? " selected" : ""}>Name (A–Z)</option>
+        <option value="count"${sortMode === "count" ? " selected" : ""}>Most files</option>
+      </select>
+      <span class="tb-count">${folders.length} folder${folders.length === 1 ? "" : "s"} · ${docs.length} file${docs.length === 1 ? "" : "s"}</span>
+    </div>`;
+  }
+
+  function folderGrid() {
+    const folders = visibleFolders();
+    if (!docs.length) {
+      return toolbar(folders) + `<div class="empty"><span class="em-ico">${Icon("folderOpen", { size: 26 })}</span>
+        No documents yet. Upload a file or add a link from a client's profile and a folder will appear here.</div>`;
+    }
+    if (!folders.length) {
+      const why = searchQ.trim() ? `No client matches “${esc(searchQ)}”.` : "No folder matches the current filter.";
+      return toolbar(folders) + `<div class="empty"><span class="em-ico">${Icon("search", { size: 26 })}</span>${why}</div>`;
+    }
+    const now = Date.now();
+    return toolbar(folders) + `<div class="folder-grid">${folders.map((f) => {
+      const fresh = f.latest && (now - f.latest) < DAY;
+      return `<button type="button" class="folder-card" data-client="${f.client_id}"
+          aria-label="Open ${esc(f.name)}'s folder, ${f.count} files">
+        <div class="fc-top">
+          <span class="fc-ic">${Icon("folder", { size: 20 })}</span>
+          <div style="min-width:0;flex:1">
+            <div class="fc-name" title="${esc(f.name)}">${esc(f.name)}</div>
+            <div class="fc-sub">${f.count} file${f.count === 1 ? "" : "s"} · ${size(f.bytes)}</div>
+          </div>
+        </div>
+        <div class="fc-foot">
+          <span class="fc-updated">${f.latest ? "Updated " + timeAgo(new Date(f.latest).toISOString()) : "—"}</span>
+          <span style="display:flex;align-items:center;gap:8px">
+            ${fresh ? `<span class="fc-new">New</span>` : ""}
+            <span class="fc-go">${Icon("chevronDown", { size: 15, style: "transform:rotate(-90deg)" })}</span>
+          </span>
+        </div>
+      </button>`;
+    }).join("")}</div>`;
+  }
+
+  function folderDetail() {
+    const mine = docs.filter((d) => d.client_id === openClientId);
+    const name = mine.length ? mine[0].client : "Folder";
+    const list = mine.filter((d) => cat === "All" || typeOf(d.filename, d.content_type, d.storage_key).cat === cat);
 
     const totalPages = Math.ceil(list.length / pageSize) || 1;
     if (page > totalPages) page = totalPages;
     const paginated = list.slice((page - 1) * pageSize, page * pageSize);
 
-    let pagerHtml = "";
-    if (list.length > pageSize) {
-      pagerHtml = `
-        <div class="d-flex justify-content-between align-items-center mt-3 pt-3 border-top" style="width: 100%;">
-          <span class="muted small">Showing ${(page - 1) * pageSize + 1}-${Math.min(page * pageSize, list.length)} of ${list.length} documents</span>
-          <div class="btn-group">
-            <button class="btn btn-sm btn-soft" id="docs-prev" ${page <= 1 ? "disabled" : ""}>← Prev</button>
-            <button class="btn btn-sm btn-soft" id="docs-next" ${page >= totalPages ? "disabled" : ""}>Next →</button>
-          </div>
-        </div>`;
-    }
+    // Only offer a type chip when the folder actually contains that type.
+    const present = new Set(mine.map((d) => typeOf(d.filename, d.content_type, d.storage_key).cat));
+    const chips = CATS.filter((c) => c === "All" || present.has(c));
 
-    const cardsHtml = paginated.length ? paginated.map((d) => {
-      const ty = typeOf(d.filename, d.content_type, d.storage_key);
-      const clickAction = d.content_type === "url"
-        ? `window.open('${esc(d.storage_key)}','_blank')`
-        : `window.open('/api/files/${d.id}/download','_blank')`;
-      
-      let aiButton = "";
-      let analysisBox = "";
-      
-      if (d.analysis) {
-        aiButton = `<button class="btn btn-sm btn-info text-white ms-2" style="font-size:11px;padding:3px 8px" onclick="event.stopPropagation(); toggleAIAnalysis(${d.id})">${Icon('sparkles', { size: 14 })} View AI</button>`;
-        
-        const a = d.analysis;
-        const keyPoints = (a.key_points || []).map(p => `<li>${esc(p)}</li>`).join("");
-        const actions = (a.pending_actions || []).map(p => `<li>${esc(p)}</li>`).join("");
-        const sentimentClass = a.sentiment === 'positive' ? 'success' : a.sentiment === 'negative' ? 'danger' : 'secondary';
-        
-        analysisBox = `
-          <div class="doc-analysis-box d-none mt-3 p-3 bg-light rounded border text-start" id="ai-box-${d.id}" onclick="event.stopPropagation();">
-            <div class="d-flex justify-content-between align-items-center mb-2">
-              <strong style="font-size:13px">${Icon('sparkles', { size: 14 })} AI Analysis</strong>
-              <span class="badge bg-${sentimentClass}-subtle text-${sentimentClass}-emphasis" style="font-size:10px">${(a.sentiment || 'neutral').toUpperCase()}</span>
-            </div>
-            <p class="mb-2 text-muted" style="font-size:12.5px;line-height:1.4"><strong>Summary:</strong> ${esc(a.summary || "No summary available.")}</p>
-            <div class="row g-2">
-              <div class="col-sm-6">
-                <strong style="font-size:11.5px">Key Points:</strong>
-                <ul class="text-muted ps-3 mb-0" style="font-size:11.5px;max-height:100px;overflow-y:auto">${keyPoints || "<li>—</li>"}</ul>
-              </div>
-              <div class="col-sm-6">
-                <strong style="font-size:11.5px">Pending Actions:</strong>
-                <ul class="text-muted ps-3 mb-0" style="font-size:11.5px;max-height:100px;overflow-y:auto">${actions || "<li>—</li>"}</ul>
-              </div>
-            </div>
-          </div>
-        `;
-      } else if (writable) {
-        aiButton = `<button class="btn btn-sm btn-success ms-2" style="font-size:11px;padding:3px 8px" onclick="event.stopPropagation(); runDocumentAI(${d.id}, this)">${Icon('bot', { size: 14 })} Analyze</button>`;
-      }
-
-      return `<div class="doc-card" style="display:flex;flex-direction:column;cursor:pointer;height:auto;padding:16px;box-shadow:var(--sh-s)" onclick="${clickAction}">
-        <div style="display:flex;align-items:flex-start;gap:12px;width:100%">
-          <div class="doc-ic" style="background:${ty.c};flex-shrink:0;height:40px;width:40px;display:flex;align-items:center;justify-content:center;font-weight:bold;color:white;border-radius:4px">${ty.t}</div>
-          <div style="min-width:0;flex-grow:1">
-            <h4 style="margin:0 0 4px;font-size:14.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(d.filename)}</h4>
-            <div class="dm" style="font-size:12px;color:var(--muted-2)">${ty.cat} ${d.content_type === "url" ? "" : `· ${size(d.size)}`}</div>
-            <div class="dm" style="margin-top:2px;display:flex;align-items:center;gap:6px;font-size:11.5px;color:var(--muted-2)">
-              ${esc(d.client)} ${d.project_title ? `<span class="badge bg-secondary-subtle text-secondary-emphasis" style="font-size:9.5px;padding:2px 6px">${Icon('folder', { size: 12 })} ${esc(d.project_title)}</span>` : ""}
-            </div>
-            <div class="dlink" style="font-size:11px;color:var(--muted-2);margin-top:4px">${esc(d.by)} · ${d.created_at ? fmtDate(d.created_at) : ""}</div>
-          </div>
-          <div style="flex-shrink:0">${aiButton}</div>
+    const pager = list.length > pageSize ? `
+      <div class="d-flex justify-content-between align-items-center mt-3 pt-3" style="border-top:1px solid var(--line-2)">
+        <span class="muted small">Showing ${(page - 1) * pageSize + 1}–${Math.min(page * pageSize, list.length)} of ${list.length}</span>
+        <div class="btn-group">
+          <button class="btn btn-sm btn-soft" id="docs-prev" ${page <= 1 ? "disabled" : ""}>← Prev</button>
+          <button class="btn btn-sm btn-soft" id="docs-next" ${page >= totalPages ? "disabled" : ""}>Next →</button>
         </div>
-        ${analysisBox}
-      </div>`;
-    }).join("") : `<div class="empty" style="grid-column:1/-1"><span class="em-ico">${Icon('file', { size: 24 })}</span>No documents yet inside this folder. Upload one from a client profile or using the button above.</div>`;
+      </div>` : "";
 
-    document.getElementById("view").innerHTML = `
-      <div class="page-head"><div><h2>Documents</h2>
-        <p>Files linked to clients — contracts, requirements, images and project docs.</p></div></div>
-      
-      <h3 class="mb-3" style="font-size:15px; font-family:var(--display); color:var(--ink)">Client Folders</h3>
-      <div class="d-flex gap-3 mb-4 overflow-x-auto pb-2" style="max-width:100%">
-        ${allFolderHtml}
-        ${foldersHtml}
-      </div>
-
-      <div class="d-flex justify-content-between align-items-center mb-3">
-        <h3 style="font-size:15px; font-family:var(--display); color:var(--ink); margin:0">
-          ${activeClientFolder === 'all' ? 'All Documents' : esc(activeClientFolder) + ' Documents'}
-        </h3>
-        <div class="toolbar" style="display:flex;gap:8px;margin:0;flex-wrap:wrap">
-          ${cats.map((c) => `<button class="chip ${c === cat ? "info" : ""}" data-c="${c}" style="cursor:pointer">${c}</button>`).join("")}
+    const totalBytes = mine.reduce((n, d) => n + (d.size || 0), 0);
+    return `<div class="folder-head">
+        <button class="btn-back" id="back-to-folders">${Icon("chevronDown", { size: 14, style: "transform:rotate(90deg)" })} All folders</button>
+        <div>
+          <div class="fh-title">${esc(name)}</div>
+          <div class="fh-sub">${mine.length} file${mine.length === 1 ? "" : "s"} · ${size(totalBytes)}</div>
         </div>
+        <div class="type-chips">${chips.map((c) => `<button class="chip ${c === cat ? "info" : ""}" data-c="${c}">${c}</button>`).join("")}</div>
       </div>
-
-      <div class="grid g-4" style="margin-bottom:16px">${cardsHtml}</div>
-      ${pagerHtml}`;
-    
-    document.querySelectorAll("[data-c]").forEach((el) => el.addEventListener("click", () => { cat = el.dataset.c; page = 1; render(); }));
-
-    const prevBtn = document.getElementById("docs-prev");
-    const nextBtn = document.getElementById("docs-next");
-    if (prevBtn) prevBtn.addEventListener("click", () => { page--; render(); });
-    if (nextBtn) nextBtn.addEventListener("click", () => { page++; render(); });
+      <div class="doc-grid">${paginated.length ? paginated.map(docCard).join("")
+        : `<div class="empty" style="grid-column:1/-1"><span class="em-ico">${Icon('file', { size: 24 })}</span>No ${cat === "All" ? "" : cat.toLowerCase() + " "}files in this folder.</div>`}</div>
+      ${pager}`;
   }
 
-  window.selectFolder = (folderName) => {
-    activeClientFolder = folderName;
-    page = 1;
-    render();
-  };
+  function render() {
+    const root = document.getElementById("view");
+    root.innerHTML = openClientId === null ? folderGrid() : folderDetail();
+    wire(root);
+  }
 
-  window.toggleAIAnalysis = (id) => {
-    const box = document.getElementById(`ai-box-${id}`);
-    if (box) box.classList.toggle("d-none");
-  };
+  function wire(root) {
+    const search = root.querySelector("#folder-search");
+    if (search) search.addEventListener("input", (e) => {
+      searchQ = e.target.value;
+      render();
+      const s = document.getElementById("folder-search");
+      if (s) { s.focus(); s.setSelectionRange(s.value.length, s.value.length); }
+    });
 
-  window.runDocumentAI = async (id, btn) => {
+    const clear = root.querySelector("#folder-search-clear");
+    if (clear) clear.addEventListener("click", () => { searchQ = ""; render(); });
+
+    // Picking a client narrows the folder grid. It must NOT open the folder —
+    // only clicking a folder card reveals what is inside.
+    const cf = root.querySelector("#client-filter");
+    if (cf) cf.addEventListener("change", (e) => {
+      const v = e.target.value;
+      filterClientId = v ? parseInt(v, 10) : null;
+      render();
+    });
+
+    const sf = root.querySelector("#sort-filter");
+    if (sf) sf.addEventListener("change", (e) => { sortMode = e.target.value; render(); });
+
+    root.querySelectorAll(".folder-card").forEach((el) =>
+      el.addEventListener("click", () => { openClientId = parseInt(el.dataset.client, 10); cat = "All"; page = 1; render(); }));
+
+    const back = root.querySelector("#back-to-folders");
+    if (back) back.addEventListener("click", () => { openClientId = null; cat = "All"; page = 1; render(); });
+
+    root.querySelectorAll("[data-c]").forEach((el) =>
+      el.addEventListener("click", () => { cat = el.dataset.c; page = 1; render(); }));
+
+    root.querySelectorAll("[data-ai]").forEach((el) =>
+      el.addEventListener("click", () => {
+        const box = document.getElementById(`ai-box-${el.dataset.ai}`);
+        if (box) box.hidden = !box.hidden;
+      }));
+
+    root.querySelectorAll("[data-run]").forEach((el) =>
+      el.addEventListener("click", () => runDocumentAI(parseInt(el.dataset.run, 10), el)));
+
+    const prev = root.querySelector("#docs-prev");
+    const next = root.querySelector("#docs-next");
+    if (prev) prev.addEventListener("click", () => { page--; render(); });
+    if (next) next.addEventListener("click", () => { page++; render(); });
+  }
+
+  // Bypass the browser's stale-while-revalidate cache so a folder that just
+  // received a file really does jump to the top.
+  async function refresh() {
+    Api.invalidateCache("/api/overview/documents");
+    docs = await Api.get("/api/overview/documents", { stale: false });
+  }
+
+  async function runDocumentAI(id, btn) {
     const original = btn.innerHTML;
     btn.disabled = true;
     btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span>';
     try {
       await Api.post(`/api/files/${id}/analyze`);
-      toast("Document analysis complete!", "success");
-      docs = await Api.get("/api/overview/documents");
+      await refresh();
       render();
+      toast("Document analysis complete", "success");
     } catch (e) {
       toast(e.message);
       btn.disabled = false;
       btn.innerHTML = original;
     }
-  };
-
-  window.toggleUploadType = () => {
-    const val = document.getElementById("up-type").value;
-    const fGroup = document.getElementById("up-file-group");
-    const lGroup = document.getElementById("up-link-group");
-    if (val === "file") {
-      fGroup.classList.remove("d-none");
-      lGroup.classList.add("d-none");
-    } else {
-      fGroup.classList.add("d-none");
-      lGroup.classList.remove("d-none");
-    }
-  };
-
-  // Upload document
-  if (writable) {
-    const upClient = document.getElementById("up-client");
-    const upProj = document.getElementById("up-project");
-    
-    const loadProjectsForClient = async (cid) => {
-      if (!cid) {
-        upProj.innerHTML = '<option value="">Select Project (Optional)</option>';
-        return;
-      }
-      try {
-        const projects = await Api.get(`/api/projects?client_id=${cid}`);
-        upProj.innerHTML = '<option value="">Select Project (Optional)</option>' +
-          projects.map(p => `<option value="${p.id}">${esc(p.title)}</option>`).join("");
-      } catch (e) {
-        upProj.innerHTML = '<option value="">Select Project (Optional)</option>';
-      }
-    };
-
-    Api.get("/api/overview/clients").then((cl) => {
-      upClient.innerHTML = '<option value="">Select a client...</option>' + 
-        cl.map((c) => `<option value="${c.id}">${esc(c.name)}</option>`).join("");
-      
-      // Auto pre-select client if user is currently inside a client folder
-      document.getElementById("upload-btn")?.addEventListener("click", () => {
-        if (activeClientFolder !== "all") {
-          const opts = Array.from(upClient.options);
-          const match = opts.find(o => o.text === activeClientFolder);
-          if (match) {
-            upClient.value = match.value;
-            loadProjectsForClient(match.value);
-          }
-        }
-      });
-    }).catch(() => {});
-    
-    upClient.addEventListener("change", () => {
-      loadProjectsForClient(upClient.value);
-    });
-
-    document.getElementById("up-save").addEventListener("click", async () => {
-      const cid = upClient.value;
-      const pid = upProj.value;
-      if (!cid) return toast("Select a client");
-      
-      const type = document.getElementById("up-type").value;
-      const clientName = upClient.options[upClient.selectedIndex].text;
-      
-      if (type === "file") {
-        const file = document.getElementById("up-file").files[0];
-        if (!file) return toast("Choose a file");
-        const fd = new FormData();
-        fd.append("client_id", cid);
-        fd.append("upload", file);
-        if (pid) fd.append("project_id", pid);
-        try {
-          await Api.postForm("/api/files", fd);
-          bootstrap.Modal.getOrCreateInstance(document.getElementById("uploadModal")).hide();
-          document.getElementById("up-file").value = "";
-          upProj.innerHTML = '<option value="">Select Project (Optional)</option>';
-          docs = await Api.get("/api/overview/documents");
-          activeClientFolder = clientName;
-          render();
-          toast("Document uploaded", "success");
-        } catch (e) { toast(e.message); }
-      } else {
-        const title = document.getElementById("up-link-title").value.trim();
-        const url = document.getElementById("up-link-url").value.trim();
-        if (!title || !url) return toast("Title and URL are required");
-        const fd = new FormData();
-        fd.append("client_id", cid);
-        fd.append("title", title);
-        fd.append("url", url);
-        if (pid) fd.append("project_id", pid);
-        try {
-          await Api.postForm("/api/files/link", fd);
-          bootstrap.Modal.getOrCreateInstance(document.getElementById("uploadModal")).hide();
-          document.getElementById("up-link-title").value = "";
-          document.getElementById("up-link-url").value = "";
-          upProj.innerHTML = '<option value="">Select Project (Optional)</option>';
-          docs = await Api.get("/api/overview/documents");
-          activeClientFolder = clientName;
-          render();
-          toast("Link added", "success");
-        } catch (e) { toast(e.message); }
-      }
-    });
   }
 
   try { docs = await Api.get("/api/overview/documents"); render(); } catch (e) { toast(e.message); }

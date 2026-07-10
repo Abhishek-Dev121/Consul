@@ -5,6 +5,7 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.cache import invalidate_cache
 from app.database import get_db
 from app.deps import get_current_user
 from app.models.ai_analysis import AIAnalysis, AnalysisTarget
@@ -86,6 +87,9 @@ async def upload_audio(
                  detail={"filename": rec.filename})
     db.commit()
     db.refresh(rec)
+    # The calls/dashboard overviews are TTL-cached per user. Without this, a new
+    # recording stays invisible for up to 30s and its folder won't rise to the top.
+    invalidate_cache("calls:", "dashboard:")
     return rec
 
 
@@ -147,6 +151,7 @@ def analyze_audio(audio_id: int, db: Session = Depends(get_db), actor: User = De
                  detail={"audio_id": rec.id})
     db.commit()
     db.refresh(row)
+    invalidate_cache("calls:", "dashboard:")   # the overview embeds this analysis
     return row
 
 

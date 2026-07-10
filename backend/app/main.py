@@ -8,7 +8,7 @@ import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, status, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import text
@@ -51,7 +51,6 @@ from app.routers import (
     projects,
     realtime,
     users,
-    chats,
 )
 from app.seed import init_db
 
@@ -72,8 +71,6 @@ async def lifespan(app: FastAPI):
     # Single configurable keep-alive (see settings.db_keepalive_seconds).
     task = asyncio.create_task(_db_keepalive()) if settings.db_keepalive_seconds > 0 else None
 
-    from app.services.websocket_manager import manager
-    await manager.init_redis()
     try:
         yield
     finally:
@@ -105,7 +102,7 @@ async def no_cache(request, call_next):
     return response
 
 # API routers
-for r in (auth, users, channels, clients, conversations, messages, projects, files, audio, ai, activities, bitrix, overview, realtime, chats):
+for r in (auth, users, channels, clients, conversations, messages, projects, files, audio, ai, activities, bitrix, overview, realtime):
     app.include_router(r.router)
 
 
@@ -119,32 +116,3 @@ app.include_router(pages.router)
 
 # Static assets (css/js) and direct file access
 app.mount("/static", StaticFiles(directory=str(FRONTEND_DIR)), name="static")
-
-# Create and mount chat uploads directory
-Path("./storage/chat_uploads").mkdir(parents=True, exist_ok=True)
-app.mount("/chat-uploads", StaticFiles(directory="./storage/chat_uploads"), name="chat-uploads")
-
-
-@app.websocket("/ws/chat")
-async def websocket_chat_endpoint(websocket: WebSocket, token: str | None = None):
-    if not token:
-        await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
-        return
-    
-    from app.services.auth_service import decode_access_token
-    payload = decode_access_token(token)
-    if not payload or "sub" not in payload:
-        await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
-        return
-    
-    user_id = int(payload["sub"])
-    from app.services.websocket_manager import manager
-    await manager.connect(websocket, user_id)
-    try:
-        while True:
-            data = await websocket.receive_json()
-            await manager.handle_message(user_id, data, websocket)
-    except WebSocketDisconnect:
-        await manager.disconnect(websocket)
-    except Exception:
-        await manager.disconnect(websocket)

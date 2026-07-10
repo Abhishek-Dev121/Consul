@@ -35,5 +35,11 @@ class Client(Base):
     created_by: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
+    # "Clear chat" marker. Messages are deleted outright, but conversation logs and
+    # file/audio records survive (Documents and Calls still need them). Anything
+    # created at or before this instant is therefore excluded from the chat feed,
+    # and the conversation->messages backfill won't resurrect it.
+    chat_cleared_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
     assignees = relationship("User", secondary=client_assignments, lazy="selectin")
     channels = relationship("Channel", secondary=client_channels, lazy="selectin")

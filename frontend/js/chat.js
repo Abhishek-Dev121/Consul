@@ -79,7 +79,7 @@
     const ch = client.channels && client.channels[0];
     document.getElementById("chat-head").innerHTML = `
       <span class="av" style="width:42px;height:42px;border-radius:12px;position:relative;
-        background:linear-gradient(135deg,var(--brand),#16B6A6)">${initials(client.name)}${ch ? `<span class="ch-dot" style="background:${chanColor(ch.platform)}"></span>` : ""}</span>
+        background:linear-gradient(135deg,var(--brand),var(--brand-2))">${initials(client.name)}${ch ? `<span class="ch-dot" style="background:${chanColor(ch.platform)}"></span>` : ""}</span>
       <div class="flex-grow-1" style="min-width:0">
         <div style="font-family:var(--display);font-weight:600;font-size:15px">${esc(client.name)}</div>
         <div class="small" style="display:flex;align-items:center;gap:7px;margin-top:2px">

@@ -25,7 +25,6 @@ _PAGES = {
     "/users": "users.html",
     "/bitrix": "bitrix.html",
     "/accept-invite": "invite.html",
-    "/team-chat": "chat_page.html",
 }
 
 

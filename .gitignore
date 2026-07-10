@@ -10,3 +10,8 @@ storage/
 
 # runtime logs
 *.log
+
+# sqlite databases created by the test suite
+test.db
+test_clear.db
+backend/test*.db

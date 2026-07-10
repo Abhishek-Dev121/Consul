@@ -5,6 +5,7 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.cache import invalidate_cache
 from app.database import get_db
 from app.deps import get_current_user
 from app.models.client import Client
@@ -99,6 +100,9 @@ async def upload_file(
                  detail={"filename": rec.filename})
     db.commit()
     db.refresh(rec)
+    # Overviews are TTL-cached per user; without this a new document stays
+    # invisible for up to 30s and its folder won't rise to the top.
+    invalidate_cache("documents:", "dashboard:")
     return rec
 
 
@@ -142,6 +146,7 @@ def add_document_link(
                  detail={"filename": rec.filename, "is_link": True})
     db.commit()
     db.refresh(rec)
+    invalidate_cache("documents:", "dashboard:")
     return rec
 
 
@@ -174,6 +179,7 @@ def delete_file(file_id: int, db: Session = Depends(get_db), actor: User = Depen
     ensure_can_write(actor)
     db.delete(rec)
     db.commit()
+    invalidate_cache("documents:", "dashboard:")
 
 
 def _client(db: Session, client_id: int) -> Client:
@@ -243,6 +249,7 @@ def analyze_file(
                  detail={"filename": rec.filename})
     db.commit()
     db.refresh(analysis)
+    invalidate_cache("documents:", "dashboard:")   # the overview embeds this analysis
     return analysis
 
 

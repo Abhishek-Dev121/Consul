@@ -2,7 +2,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
-from sqlalchemy import select
+from sqlalchemy import delete as sa_delete, select, update as sa_update
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -12,8 +12,8 @@ from app.models.client import Client
 from app.models.conversation import Conversation
 from app.models.file import FileRecord
 from app.models.message import Message
-from app.models.user import User
-from app.rbac import ensure_can_write, ensure_client_access
+from app.models.user import User, UserRole
+from app.rbac import ensure_can_write, ensure_client_access, has_min_role
 from app.schemas.message import MessageCreate, MessageEdit, MessageOut
 from app.services import chat_service, storage_service
 from app.services.activity_service import log_activity
@@ -84,9 +84,24 @@ def list_messages(client_id: int, db: Session = Depends(get_db), user: User = De
     ).scalars().all()
     
     existing_urls = {m.attachment_url for m in messages if m.attachment_url}
-    
+
+    # After a "clear chat", the File/Audio rows survive (Documents and Calls still
+    # list them) but must not flow back into the chat feed. Drop anything created
+    # at or before the cutoff.
+    cleared_at = client.chat_cleared_at
+
+    def _kept(created_at) -> bool:
+        if cleared_at is None or created_at is None:
+            return True
+        when = created_at if created_at.tzinfo else created_at.replace(tzinfo=timezone.utc)
+        cut = cleared_at if cleared_at.tzinfo else cleared_at.replace(tzinfo=timezone.utc)
+        return when > cut
+
+    files = [f for f in files if _kept(f.created_at)]
+    audios = [a for a in audios if _kept(a.created_at)]
+
     merged = list(messages)
-    
+
     for f in files:
         url = f.storage_key if f.content_type == "url" else f"/api/files/{f.id}/download"
         if url not in existing_urls:
@@ -366,6 +381,52 @@ async def send_attachment(
     db.refresh(msg)
     msg.mine = True
     return msg
+
+
+def _wipe_messages(db: Session, client_ids: list[int]) -> int:
+    """Hard-delete every message for the given clients and stamp the clear marker.
+
+    message_hidden rows cascade at the DB level; messages.reply_to_id is ON DELETE
+    SET NULL, so quoted replies survive as plain messages rather than orphaning.
+    """
+    if not client_ids:
+        return 0
+    removed = db.execute(sa_delete(Message).where(Message.client_id.in_(client_ids))).rowcount or 0
+    db.execute(
+        sa_update(Client)
+        .where(Client.id.in_(client_ids))
+        .values(chat_cleared_at=datetime.now(timezone.utc))
+    )
+    return removed
+
+
+@router.delete("/messages/all", status_code=200)
+def clear_all_chats(db: Session = Depends(get_db), actor: User = Depends(get_current_user)):
+    """Wipe every message in every conversation. Super Admin only — this is the
+    most destructive action in the app, so it deliberately ignores assignment
+    scoping and is not available to admins."""
+    if actor.role != UserRole.super_admin:
+        raise HTTPException(status_code=403, detail="Only a Super Admin can clear all chats")
+    client_ids = db.execute(select(Client.id)).scalars().all()
+    removed = _wipe_messages(db, list(client_ids))
+    log_activity(db, action="chat.cleared_all", actor_id=actor.id,
+                 detail={"clients": len(client_ids), "messages": removed})
+    db.commit()
+    return {"clients": len(client_ids), "messages_deleted": removed}
+
+
+@router.delete("/{client_id}/messages", status_code=200)
+def clear_chat(client_id: int, db: Session = Depends(get_db), actor: User = Depends(get_current_user)):
+    """Clear one client's chat: every message goes, for everyone. Attachments stay
+    on disk and remain listed under Documents / Call Recordings."""
+    client = _client(db, client_id)
+    ensure_client_access(actor, client)
+    ensure_can_write(actor)
+    removed = _wipe_messages(db, [client.id])
+    log_activity(db, action="chat.cleared", actor_id=actor.id, client_id=client.id,
+                 detail={"messages": removed})
+    db.commit()
+    return {"messages_deleted": removed}
 
 
 def _own_recent_message(db: Session, client_id: int, message_id: int, actor: User) -> Message:

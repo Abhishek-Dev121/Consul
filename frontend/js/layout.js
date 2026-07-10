@@ -7,7 +7,6 @@ const NAV = [
     { href: "/dashboard", label: "Dashboard", icon: "home", min: "employee" },
     { href: "/clients", label: "Clients", icon: "users", min: "employee" },
     { href: "/conversations", label: "Conversations", icon: "message", min: "employee" },
-    { href: "/team-chat", label: "Team Chat", icon: "message", min: "employee" },
     { href: "/projects", label: "Projects", icon: "folder", min: "employee" },
   ]},
   { section: "Records", items: [
@@ -65,6 +64,7 @@ async function requireAuth() {
 
 function canWrite() { return CURRENT_USER && ROLE_RANK[CURRENT_USER.role] >= ROLE_RANK.team_lead; }
 function isAdmin() { return CURRENT_USER && ROLE_RANK[CURRENT_USER.role] >= ROLE_RANK.admin; }
+function isSuperAdmin() { return CURRENT_USER && CURRENT_USER.role === "super_admin"; }
 
 function initials(name) {
   return (name || "?").split(/\s+/).map((w) => w[0]).slice(0, 2).join("").toUpperCase();
@@ -136,7 +136,13 @@ function doRenderLayout(active, pageTitle, user, opts) {
   ensureAccountModal();
 
   // ---- Topbar ----
-  const actions = opts.actions || "";
+  const actions = opts.hideActions ? "" : (opts.actions || "");
+  const search = opts.hideSearch ? "" : `
+        <div class="tb-search">
+          <span class="s-ico">${Icon("search", { size: 15 })}</span>
+          <input id="tb-search-input" placeholder="Search clients, chats…" autocomplete="off" />
+          <div class="tb-results d-none" id="tb-results"></div>
+        </div>`;
   const topbarEl = document.getElementById("app-topbar");
   if (topbarEl) {
     topbarEl.innerHTML = `
@@ -148,11 +154,7 @@ function doRenderLayout(active, pageTitle, user, opts) {
         </div>
       </div>
       <div class="tb-right">
-        <div class="tb-search">
-          <span class="s-ico">${Icon("search", { size: 15 })}</span>
-          <input id="tb-search-input" placeholder="Search clients, chats…" autocomplete="off" />
-          <div class="tb-results d-none" id="tb-results"></div>
-        </div>
+        ${search}
         ${actions}
         <button class="icon-btn" id="theme-toggle" title="Toggle light / dark">${Icon("moon")}</button>
         <div class="dropdown">
@@ -206,8 +208,42 @@ async function renderLayout(active, pageTitle, opts = {}) {
 }
 
 // Theme, collapse, and mobile-nav controls.
+// Reveal `.reveal` elements as they scroll into view.
+//
+// Fail-open: the `js-reveal` class on <html> is what actually hides them, and we
+// only add it when IntersectionObserver exists. So no JS, a thrown error, or an
+// old browser all degrade to "content visible, no animation" — never to a blank
+// page. A failsafe timer additionally un-hides anything the observer hasn't
+// reported on (e.g. a background tab, where rAF and IO callbacks never run).
+const REVEAL_FAILSAFE_MS = 1600;
+
+function wireScrollReveal(root = document) {
+  if (!("IntersectionObserver" in window)) return;   // leave content visible
+  document.documentElement.classList.add("js-reveal");
+
+  const items = root.querySelectorAll(".reveal:not(.is-revealed)");
+  if (!items.length) return;
+
+  const show = (el) => el.classList.add("is-revealed");
+  let observerAlive = false;
+  const io = new IntersectionObserver((entries, obs) => {
+    observerAlive = true;   // it reports non-intersecting entries too
+    entries.forEach((e) => {
+      if (!e.isIntersecting) return;
+      show(e.target);
+      obs.unobserve(e.target);   // reveal once; don't re-hide on scroll-up
+    });
+  }, { rootMargin: "0px 0px -8% 0px", threshold: 0.05 });
+  items.forEach((el) => io.observe(el));
+
+  // Only rescue when the observer never reported at all. Revealing everything
+  // unconditionally would defeat scroll-reveal for below-the-fold content.
+  setTimeout(() => { if (!observerAlive) items.forEach(show); }, REVEAL_FAILSAFE_MS);
+}
+
 function wireChrome() {
   updateThemeIcon();
+  wireScrollReveal();
   const themeBtn = document.getElementById("theme-toggle");
   if (themeBtn) themeBtn.onclick = toggleTheme;
 
@@ -248,6 +284,7 @@ function updateThemeIcon() {
 function wireTopbar() {
   const input = document.getElementById("tb-search-input");
   const results = document.getElementById("tb-results");
+  if (!input || !results) return;
   let cache = null, t;
 
   async function ensure() {
@@ -303,38 +340,72 @@ function logout() {
 }
 
 // Styled confirmation dialog → Promise<boolean>. Replaces native confirm().
+//
+// opts: { title, confirmText, cancelText, danger, icon, note, consequences[],
+//         confirmPhrase } — confirmPhrase forces the user to type an exact word
+// before the action unlocks, for the handful of truly irreversible operations.
 function confirmDialog(message, opts = {}) {
   return new Promise((resolve) => {
-    let el = document.getElementById("confirmModal");
-    if (!el) {
-      document.body.insertAdjacentHTML("beforeend", `
-        <div class="modal fade" id="confirmModal" tabindex="-1"><div class="modal-dialog modal-dialog-centered" style="max-width:430px">
-          <div class="modal-content"><div class="modal-body text-center p-4">
-            <div class="confirm-icon" id="confirm-icon"></div>
-            <h5 class="mt-3 mb-2" id="confirm-title" style="font-family:var(--display);font-weight:600"></h5>
-            <p class="muted mb-0" id="confirm-msg" style="font-size:13.5px;line-height:1.5"></p>
-          </div>
-          <div class="modal-footer border-0 justify-content-center pb-4 pt-0">
-            <button class="btn btn-light px-4" id="confirm-cancel">Cancel</button>
-            <button class="btn px-4" id="confirm-ok"></button>
-          </div></div></div></div>`);
-      el = document.getElementById("confirmModal");
-    }
-    const danger = opts.danger !== false;
-    document.getElementById("confirm-icon").innerHTML = Icon(danger ? "trash" : "help", { size: 24 });
-    document.getElementById("confirm-icon").className = "confirm-icon" + (danger ? " danger" : "");
-    document.getElementById("confirm-title").textContent = opts.title || "Are you sure?";
-    document.getElementById("confirm-msg").textContent = message || "";
-    const ok = document.getElementById("confirm-ok");
-    ok.textContent = opts.confirmText || (danger ? "Delete" : "Confirm");
-    ok.className = "btn px-4 " + (danger ? "btn-danger" : "btn-primary");
+    // Rebuilt each time: the body varies (note, consequences, type-to-confirm).
+    const old = document.getElementById("confirmModal");
+    if (old) old.remove();
 
+    const danger = opts.danger !== false;
+    const icon = opts.icon || (danger ? "trash" : "help");
+    const phrase = opts.confirmPhrase || "";
+    const consequences = opts.consequences || [];
+
+    document.body.insertAdjacentHTML("beforeend", `
+      <div class="modal fade confirm-modal" id="confirmModal" tabindex="-1" aria-labelledby="confirm-title">
+        <div class="modal-dialog modal-dialog-centered">
+          <div class="modal-content">
+            <div class="confirm-body">
+              <div class="confirm-icon ${danger ? "danger" : ""}">${Icon(icon, { size: 22 })}</div>
+              <div class="confirm-copy">
+                <h5 id="confirm-title">${esc(opts.title || "Are you sure?")}</h5>
+                <p id="confirm-msg">${esc(message || "")}</p>
+                ${consequences.length ? `<ul class="confirm-list">${
+                  consequences.map((c) => `<li>${esc(c)}</li>`).join("")
+                }</ul>` : ""}
+                ${opts.note ? `<div class="confirm-note">${Icon("info", { size: 14 })}<span>${esc(opts.note)}</span></div>` : ""}
+                ${phrase ? `<label class="confirm-phrase">
+                  <span>Type <b>${esc(phrase)}</b> to confirm</span>
+                  <input type="text" id="confirm-phrase-input" autocomplete="off" spellcheck="false" placeholder="${esc(phrase)}" />
+                </label>` : ""}
+              </div>
+            </div>
+            <div class="confirm-actions">
+              <button class="btn btn-light" id="confirm-cancel">${esc(opts.cancelText || "Cancel")}</button>
+              <button class="btn ${danger ? "btn-danger" : "btn-primary"}" id="confirm-ok" ${phrase ? "disabled" : ""}>
+                ${esc(opts.confirmText || (danger ? "Delete" : "Confirm"))}
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>`);
+
+    const el = document.getElementById("confirmModal");
+    const ok = document.getElementById("confirm-ok");
     const modal = bootstrap.Modal.getOrCreateInstance(el);
+
+    if (phrase) {
+      const input = document.getElementById("confirm-phrase-input");
+      const check = () => { ok.disabled = input.value.trim().toUpperCase() !== phrase.toUpperCase(); };
+      input.addEventListener("input", check);
+      // Deliberately no Enter-to-submit and no autofocus on the confirm button:
+      // for an irreversible action the last step must be an explicit click, so a
+      // stray keypress while the phrase is typed can never fire it.
+      input.addEventListener("keydown", (e) => { if (e.key === "Enter") e.preventDefault(); });
+      el.addEventListener("shown.bs.modal", () => input.focus(), { once: true });
+    } else {
+      el.addEventListener("shown.bs.modal", () => ok.focus(), { once: true });
+    }
+
     let done = false;
     const finish = (v) => { if (done) return; done = true; modal.hide(); resolve(v); };
-    ok.onclick = () => finish(true);
+    ok.onclick = () => { if (!ok.disabled) finish(true); };
     document.getElementById("confirm-cancel").onclick = () => finish(false);
-    el.addEventListener("hidden.bs.modal", () => finish(false), { once: true });
+    el.addEventListener("hidden.bs.modal", () => { finish(false); el.remove(); });
     modal.show();
   });
 }
