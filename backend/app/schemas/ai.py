@@ -25,6 +25,7 @@ class ActivityOut(ORMModel):
     id: int
     client_id: int | None
     actor_id: int | None
+    actor_name: str | None = None
     action: str
     detail: dict = {}
     created_at: datetime

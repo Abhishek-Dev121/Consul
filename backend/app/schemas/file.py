@@ -13,6 +13,7 @@ class FileOut(ORMModel):
     content_type: str | None
     size: int | None
     created_at: datetime
+    archived_at: datetime | None = None
     analysis: AIAnalysisOut | None = None
 
 
@@ -25,3 +26,4 @@ class AudioOut(ORMModel):
     content_type: str | None
     duration: float | None
     created_at: datetime
+    archived_at: datetime | None = None

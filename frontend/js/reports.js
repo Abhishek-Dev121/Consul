@@ -72,7 +72,7 @@
         ${kpi(Icon("sparkles", { size: 18 }), "Analyzed chats", d.kpis.analyzed, "total")}
       </div>
 
-      <div class="grid" style="grid-template-columns:1.5fr 1fr;align-items:start">
+      <div class="dash-split wide-left">
         <div class="card card-pad">
           <h3 style="font-family:var(--display);font-size:14.5px;font-weight:600">Weekly volume by sentiment</h3>
           <p style="font-size:11.5px;color:var(--muted-2);margin:2px 0 8px">Last 5 weeks</p>
@@ -90,10 +90,11 @@
             <div><span class="ld" style="background:var(--neg)"></span>Negative</div></div>
         </div>
         <div class="card"><div class="card-h"><h3>Team productivity</h3><span class="muted small mono">all time</span></div>
-          <div class="card-pad">${d.team.length ? d.team.map((t) => `<div style="display:flex;align-items:center;gap:10px;margin-bottom:11px">
-            ${avBox(t.name)}<span style="font-size:12.5px;flex:none;width:96px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(t.name.split(" ")[0])}</span>
-            <div class="vt" style="flex:1;height:7px;background:var(--line);border-radius:4px;overflow:hidden"><div style="height:100%;width:${(t.actions / maxT) * 100}%;background:var(--brand);border-radius:4px"></div></div>
-            <span class="mono" style="font-size:11.5px;color:var(--muted);width:26px;text-align:right">${t.actions}</span></div>`).join("")
+          <div class="card-pad">${d.team.length ? d.team.map((t) => `<div class="prod-row">
+            ${avBox(t.name)}
+            <span class="prod-name" title="${esc(t.name)}">${esc(t.name.split(" ")[0])}</span>
+            <div class="vt"><div style="width:${(t.actions / maxT) * 100}%"></div></div>
+            <span class="mono prod-score">${t.actions}</span></div>`).join("")
             : '<p class="muted small">No activity logged yet.</p>'}
           <div style="font-size:11px;color:var(--muted-2);margin-top:4px">Actions logged per team member</div></div>
         </div>

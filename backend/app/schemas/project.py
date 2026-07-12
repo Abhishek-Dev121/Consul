@@ -42,7 +42,12 @@ class ProjectOut(ORMModel):
     due_date: datetime | None = None
     deliverables: str | None = None
     synced_at: datetime | None = None
-    
+
+    # False for a Bitrix workgroup that has never been synced locally. Its tasks
+    # and members were never fetched, so an empty `tasks` list means "unknown",
+    # not "none". ORM projects have no such column and default to True.
+    synced: bool = True
+
     # New project group fields
     bitrix_group_name: str | None = None
     member_count: int | None = None

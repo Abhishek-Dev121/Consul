@@ -14,18 +14,23 @@
     <aside class="sidebar" id="app-sidebar"></aside>
     <div class="main">
       <header class="topbar" id="app-topbar"></header>
-      <main class="content">
-        <a href="/clients" class="muted small text-decoration-none">← Back to clients</a>
+      <main class="content cd-page">
+        <a href="/clients" id="back-link" class="cd-back">← Back to clients</a>
 
-        <ul class="nav nav-tabs mt-3" role="tablist">
-          <li class="nav-item"><button class="nav-link active" data-bs-toggle="tab" data-bs-target="#tab-info">Info</button></li>
-          <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-conv">Conversations</button></li>
-          <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-media">Media</button></li>
-          <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-proj">Projects</button></li>
-          <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-files">Files</button></li>
-          <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-audio">Audio</button></li>
-          <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-activity">Activity</button></li>
-        </ul>
+        <!-- Profile hero (populated by client_detail.js) -->
+        <div id="cd-hero" class="cd-hero"></div>
+
+        <div class="cd-tabs-wrap">
+          <ul class="nav nav-tabs cd-tabs" role="tablist">
+            <li class="nav-item"><button class="nav-link active" data-bs-toggle="tab" data-bs-target="#tab-info">Info</button></li>
+            <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-conv">Conversations</button></li>
+            <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-media">Media</button></li>
+            <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-proj">Projects</button></li>
+            <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-files">Files</button></li>
+            <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-audio">Audio</button></li>
+            <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-activity">Activity</button></li>
+          </ul>
+        </div>
 
         <div class="tab-content pt-3">
           <div class="tab-pane fade show active" id="tab-info"><div id="info-body"></div></div>

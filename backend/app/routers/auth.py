@@ -2,11 +2,12 @@ import time
 from collections import defaultdict
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, Form, HTTPException, Request, status
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.config import settings
 from app.database import get_db
 from app.deps import get_current_user
 from app.models.user import User, UserRole
@@ -46,6 +47,7 @@ def _record_fail(key: str) -> None:
 def login(
     request: Request,
     form: OAuth2PasswordRequestForm = Depends(),
+    remember: bool = Form(False),
     db: Session = Depends(get_db),
 ):
     key = _throttle_key(form.username, request)
@@ -63,7 +65,12 @@ def login(
     _fails.pop(key, None)  # reset on success
     user.last_login_at = datetime.now(timezone.utc)
     db.commit()
-    return Token(access_token=create_access_token(user.id, {"role": user.role.value}))
+    # "Keep me signed in" must extend the token itself, not just where the browser
+    # stores it — otherwise the session still expires after access_token_expire_minutes.
+    expires = settings.remember_me_expire_days * 24 * 60 if remember else None
+    return Token(
+        access_token=create_access_token(user.id, {"role": user.role.value}, expires_minutes=expires)
+    )
 
 
 @router.post("/change-password")

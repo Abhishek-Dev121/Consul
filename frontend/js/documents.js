@@ -90,6 +90,8 @@
       aiButton = `<button class="btn btn-soft btn-sm doc-ai-btn" data-ai="${d.id}">${Icon('sparkles', { size: 13 })} AI</button>`;
       const keyPoints = (a.key_points || []).map((p) => `<li>${esc(p)}</li>`).join("");
       const acts = (a.pending_actions || []).map((p) => `<li>${esc(p)}</li>`).join("");
+      // Follow-ups also carry the model's open questions, so never drop them.
+      const ups = (a.follow_ups || []).map((p) => `<li>${esc(p)}</li>`).join("");
       analysisBox = `<div class="doc-ai-box" id="ai-box-${d.id}" hidden>
           <div class="dab-head">
             <strong>${Icon('sparkles', { size: 13 })} AI analysis</strong>
@@ -99,6 +101,7 @@
           <div class="dab-cols">
             <div><div class="dab-lab">Key points</div><ul class="ai-list">${keyPoints || "<li class='muted'>—</li>"}</ul></div>
             <div><div class="dab-lab">Pending actions</div><ul class="ai-list todo">${acts || "<li class='muted'>—</li>"}</ul></div>
+            ${ups ? `<div><div class="dab-lab">Follow-ups &amp; open questions</div><ul class="ai-list">${ups}</ul></div>` : ""}
           </div>
         </div>`;
     } else if (writable) {

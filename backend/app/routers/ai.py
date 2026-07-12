@@ -22,7 +22,8 @@ def analyze_conversation(conv_id: int, db: Session = Depends(get_db), actor: Use
     conv = db.get(Conversation, conv_id)
     if not conv:
         raise HTTPException(status_code=404, detail="Conversation not found")
-    ensure_client_access(actor, db.get(Client, conv.client_id))
+    client = db.get(Client, conv.client_id)
+    ensure_client_access(actor, client)
     ensure_can_write(actor)
 
     # Fetch live messages, files, and audio recordings to build the transcript
@@ -82,8 +83,22 @@ def analyze_conversation(conv_id: int, db: Session = Depends(get_db), actor: Use
     else:
         transcript = conv.raw_content
 
+    if not transcript or not transcript.strip():
+        raise HTTPException(status_code=400, detail="This conversation has no messages to analyse yet.")
+
+    # Who and when: without this the model cannot tell which side is the client,
+    # and reads relative dates ("next Friday") against the wrong calendar.
+    stamps = [ts for ts, _, _ in events if ts]
+    context = {
+        "Client": client.name if client else None,
+        "Company": client.company if client else None,
+        "Conversation": conv.title or None,
+        "Date range": (f"{min(stamps):%Y-%m-%d} to {max(stamps):%Y-%m-%d}" if stamps else None),
+        "Messages": str(len(events)) if events else None,
+    }
+
     try:
-        analysis = ai_service.analyze_conversation(transcript)
+        analysis = ai_service.analyze_conversation(transcript, context=context)
     except RuntimeError as e:
         raise HTTPException(status_code=503, detail=str(e))
 

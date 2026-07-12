@@ -1,4 +1,5 @@
 import io
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, Request
 from fastapi.responses import StreamingResponse
@@ -22,13 +23,19 @@ router = APIRouter(prefix="/api/audio", tags=["audio"])
 
 
 @router.get("", response_model=list[AudioOut])
-def list_audio(client_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+def list_audio(
+    client_id: int,
+    archived: bool = False,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     ensure_client_access(user, _client(db, client_id))
     from app.models.project import Project
     stmt = (
         select(AudioRecording, Project.title.label("project_title"))
         .outerjoin(Project, AudioRecording.project_id == Project.id)
         .where(AudioRecording.client_id == client_id)
+        .where(AudioRecording.archived_at.isnot(None) if archived else AudioRecording.archived_at.is_(None))
         .order_by(AudioRecording.created_at.desc())
     )
     results = db.execute(stmt).all()
@@ -99,7 +106,13 @@ def download_audio(audio_id: int, request: Request, db: Session = Depends(get_db
     if not rec:
         raise HTTPException(status_code=404, detail="Audio not found")
     ensure_client_access(user, _client(db, rec.client_id))
-    data = storage_service.read_bytes(rec.storage_key)
+    try:
+        data = storage_service.read_bytes(rec.storage_key)
+    except storage_service.StoredFileMissing:
+        raise HTTPException(
+            status_code=404,
+            detail="This recording's file is no longer available on the server.",
+        )
     # Videos are stored as AudioRecording too — derive the real type from the
     # filename so a .mp4 isn't served as audio (which stops it playing).
     return storage_service.range_response(
@@ -109,6 +122,52 @@ def download_audio(audio_id: int, request: Request, db: Session = Depends(get_db
         rec.filename,
         inline=True
     )
+
+
+@router.post("/{audio_id}/archive", status_code=204)
+def archive_audio(audio_id: int, db: Session = Depends(get_db), actor: User = Depends(get_current_user)):
+    """Soft-delete: move the recording to the Archive. Reversible via /restore."""
+    rec = db.get(AudioRecording, audio_id)
+    if not rec:
+        raise HTTPException(status_code=404, detail="Audio not found")
+    ensure_client_access(actor, _client(db, rec.client_id))
+    ensure_can_write(actor)
+    rec.archived_at = datetime.now(timezone.utc)
+    db.commit()
+    invalidate_cache("calls:", "dashboard:")
+
+
+@router.post("/{audio_id}/restore", status_code=204)
+def restore_audio(audio_id: int, db: Session = Depends(get_db), actor: User = Depends(get_current_user)):
+    """Move an archived recording back to the active list."""
+    rec = db.get(AudioRecording, audio_id)
+    if not rec:
+        raise HTTPException(status_code=404, detail="Audio not found")
+    ensure_client_access(actor, _client(db, rec.client_id))
+    ensure_can_write(actor)
+    rec.archived_at = None
+    db.commit()
+    invalidate_cache("calls:", "dashboard:")
+
+
+@router.delete("/{audio_id}", status_code=204)
+def delete_audio(audio_id: int, db: Session = Depends(get_db), actor: User = Depends(get_current_user)):
+    """Permanent delete: removes the DB row and the file on disk."""
+    rec = db.get(AudioRecording, audio_id)
+    if not rec:
+        raise HTTPException(status_code=404, detail="Audio not found")
+    ensure_client_access(actor, _client(db, rec.client_id))
+    ensure_can_write(actor)
+    try:
+        import os
+        path = storage_service.local_path(rec.storage_key)
+        if path and os.path.exists(path):
+            os.remove(path)
+    except OSError:
+        pass
+    db.delete(rec)
+    db.commit()
+    invalidate_cache("calls:", "dashboard:")
 
 
 @router.post("/{audio_id}/analyze", response_model=AIAnalysisOut)
@@ -128,8 +187,17 @@ def analyze_audio(audio_id: int, db: Session = Depends(get_db), actor: User = De
         rec.duration = tr["duration"]
 
     transcript = tr.get("transcript", "")
+    from app.models.project import Project
+
+    client = db.get(Client, rec.client_id)
+    project = db.get(Project, rec.project_id) if rec.project_id else None
     try:
-        analysis = ai_service.analyze_transcript(transcript) if transcript else {}
+        analysis = ai_service.analyze_transcript(transcript, context={
+            "Client": client.name if client else None,
+            "Project": project.title if project else None,
+            "Recording": rec.filename,
+            "Recorded": rec.created_at.strftime("%Y-%m-%d") if rec.created_at else None,
+        }) if transcript else {}
     except RuntimeError as e:
         raise HTTPException(status_code=503, detail=str(e))
 

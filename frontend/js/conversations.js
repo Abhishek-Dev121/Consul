@@ -153,6 +153,8 @@
   let recognition = null, recognizing = false;
   let presenceTimer = null, typingSentAt = 0;
   let replyingTo = null, selectMode = false, selected = new Set();
+  let sending = false;          // guards against double-send (Enter + click)
+  let threadSig = "";           // signature of the last-rendered message set
 
   // ── Presence + typing + read receipts (team-scoped, light polling) ──
   function markRead(clientId) { Api.post(`/api/clients/${clientId}/read`).catch(() => {}); }
@@ -168,6 +170,9 @@
         updateTyping(p.typing || []);
         updateOnline(p.online_user_ids || []);
       } catch (_) {}
+      // Pull new messages on the same cadence so incoming messages appear
+      // near-instantly instead of only when the thread is re-opened.
+      refreshMessagesIfChanged(clientId);
     };
     poll();
     presenceTimer = setInterval(poll, 3000);
@@ -275,7 +280,7 @@
         </span>
       </button>
       <div class="th2-acts">
-        <a class="icon-btn" href="/client?id=${cl.id}" title="Full profile">
+        <a class="icon-btn" href="/client?id=${cl.id}&from=conversations" title="Full profile">
           <svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 3.6-7 8-7s8 3 8 7"/></svg>
         </a>
         <button class="icon-btn" id="chat-menu-btn" title="Chat options" aria-haspopup="true">${Icon("dots", { size: 16 })}</button>
@@ -353,16 +358,51 @@
       renderReplyBar();  // restore the reply preview if one is active
     }
 
-    // Load messages
+    // Load messages fresh (never stale) so a send / delete / incoming message
+    // appears at once rather than only after a manual refresh.
     try {
-      const msgs = await Api.get(`/api/clients/${cl.id}/messages`);
-      const body = document.getElementById("th2-body");
-      if (!msgs.length) {
-        body.innerHTML = `<div class="conv-empty-state" style="height:auto;padding:40px 0">
-          <div class="icon-wrap" style="width:48px;height:48px;font-size:20px">${Icon("message", { size: 20 })}</div>
-          <p style="max-width:220px">No messages yet. Start the conversation below.</p>
-        </div>`;
-      } else {
+      const msgs = await Api.get(`/api/clients/${cl.id}/messages`, { stale: false });
+      threadSig = sigOf(msgs);
+      paintMessages(msgs, false);
+    } catch (e) { toast(e.message); }
+  }
+
+  // A lightweight fingerprint of the message set — id + read/edited/deleted flags.
+  // If it hasn't changed, there's nothing to repaint.
+  function sigOf(msgs) {
+    return msgs.map((m) => `${m.id}:${m.read ? 1 : 0}:${m.edited ? 1 : 0}:${m.deleted ? 1 : 0}`).join(",");
+  }
+
+  // Poll-driven refresh (from startPresence). Repaints only when the set actually
+  // changed, and never while the user is mid-interaction or an upload is in flight
+  // — so incoming messages appear within the poll interval without disruption.
+  async function refreshMessagesIfChanged(clientId) {
+    if (active !== clientId || view === "archived" || sending) return;
+    if (document.querySelector(".bubble2.editing") || document.getElementById("msg-menu") || selectMode) return;
+    let msgs;
+    try { msgs = await Api.get(`/api/clients/${clientId}/messages`, { stale: false }); }
+    catch (_) { return; }
+    if (active !== clientId) return;                 // client switched mid-fetch
+    const sig = sigOf(msgs);
+    if (sig === threadSig) return;                   // nothing new
+    threadSig = sig;
+    paintMessages(msgs, true);
+  }
+
+  function paintMessages(msgs, preserveScroll) {
+    const body = document.getElementById("th2-body");
+    if (!body) return;
+    // If the user has scrolled up to read history, a poll refresh must not yank
+    // them to the bottom. A fresh open / own send always scrolls down.
+    const nearBottom = body.scrollHeight - body.scrollTop - body.clientHeight < 90;
+    if (!msgs.length) {
+      body.innerHTML = `<div class="conv-empty-state" style="height:auto;padding:40px 0">
+        <div class="icon-wrap" style="width:48px;height:48px;font-size:20px">${Icon("message", { size: 20 })}</div>
+        <p style="max-width:220px">No messages yet. Start the conversation below.</p>
+      </div>`;
+      return;
+    }
+    {
         const token = Api.token();
         const waTime = (d) => d ? new Date(d).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "";
         const waDay = (d) => {
@@ -453,12 +493,33 @@
         }
         body.innerHTML = html;
         wireMessageMenus(body);
-        body.scrollTop = body.scrollHeight;
+        if (!preserveScroll || nearBottom) body.scrollTop = body.scrollHeight;
         // Delegated image click → WhatsApp-style lightbox (no inline onclick = no XSS).
         body.querySelectorAll(".att-img").forEach((img) =>
           img.addEventListener("click", () => openLightbox(img.dataset.url)));
+    }
+  }
+
+  // Open a media URL in a new tab, but confirm it actually loads first. After the
+  // region migration some files exist as DB rows but not on disk (404), which
+  // otherwise opened a broken tab. Probe with a 1-byte range GET — the download
+  // routes are GET-only (HEAD returns 405) and support ranges, so a missing file
+  // returns 404 while an existing one returns 200/206.
+  async function openMedia(url, label) {
+    try {
+      const res = await fetch(url, { headers: { Range: "bytes=0-0" } });
+      if (res.status === 404) {
+        toast(`${label || "This file"} is no longer available on the server.`);
+        return;
       }
-    } catch (e) { toast(e.message); }
+      if (!res.ok && res.status !== 206) {
+        toast(`Couldn't open ${label ? label.toLowerCase() : "the file"} (error ${res.status}).`);
+        return;
+      }
+      window.open(url, "_blank", "noopener");
+    } catch (_) {
+      toast("Couldn't open the file — network error.");
+    }
   }
 
   // ── Image lightbox (WhatsApp-style full-screen viewer) ──
@@ -478,7 +539,9 @@
       el.querySelector(".lb-close").addEventListener("click", close);
       document.addEventListener("keydown", (e) => { if (e.key === "Escape") close(); });
     }
-    el.querySelector(".lb-img").src = url;
+    const img = el.querySelector(".lb-img");
+    img.onerror = () => { el.classList.remove("show"); toast("This image is no longer available on the server."); };
+    img.src = url;
     el.querySelector(".lb-download").href = url;
     el.classList.add("show");
   }
@@ -683,10 +746,21 @@
   }
 
   async function sendMessage() {
+    // Guard against a double-send when Enter and the Send button both fire.
+    if (sending) return;
     const ta = document.getElementById("composer-text");
     const text = (ta.value || "").trim();
-    if (!text && !pendingAttachments.length) return;
+    const files = pendingAttachments.slice();
+    if (!text && !files.length) return;
     const cl = clients.find((x) => x.id === active);
+    if (!cl) return;
+
+    sending = true;
+    const sendBtn = document.getElementById("send-btn");
+    if (sendBtn) sendBtn.disabled = true;
+    // Take ownership of the queue immediately so a second trigger sees nothing.
+    pendingAttachments = [];
+
     try {
       // Send text first (carrying the quoted-reply target, if any).
       if (text) {
@@ -695,21 +769,69 @@
         ta.style.height = "auto";
         clearReply();
       }
-      // Then upload each attachment — this endpoint classifies by file type and
-      // routes video/audio to the audio folder, everything else to documents.
-      for (const file of pendingAttachments) {
-        const fd = new FormData();
-        fd.append("upload", file);
+      renderAttPreviews();   // clear the composer preview strip
+
+      // Upload each attachment with a WhatsApp-style progress bubble.
+      for (const file of files) {
+        const bubble = addUploadingBubble(file);
         try {
-          await Api.postForm(`/api/clients/${cl.id}/messages/upload`, fd);
+          await Api.uploadForm(`/api/clients/${cl.id}/messages/upload`, uploadBody(file),
+            (frac) => setUploadProgress(bubble, frac));
+          setUploadProgress(bubble, 1);
         } catch (e) {
+          markUploadFailed(bubble, file.name);
           toast("Could not upload " + file.name + ": " + e.message);
         }
       }
-      pendingAttachments = [];
-      renderAttPreviews();
-      await renderThread();
-    } catch (e) { toast(e.message); }
+      await renderThread();   // repaint from the server (replaces the bubbles)
+    } catch (e) {
+      toast(e.message);
+    } finally {
+      sending = false;
+      const b = document.getElementById("send-btn");
+      if (b) b.disabled = false;
+    }
+  }
+
+  function uploadBody(file) { const fd = new FormData(); fd.append("upload", file); return fd; }
+
+  // Optimistic "uploading" bubble shown in the thread while bytes are in flight.
+  function addUploadingBubble(file) {
+    const body = document.getElementById("th2-body");
+    if (!body) return null;
+    const isImg = file.type.startsWith("image/");
+    const isVid = file.type.startsWith("video/");
+    const thumb = (isImg || isVid) ? URL.createObjectURL(file) : null;
+    const el = document.createElement("div");
+    el.className = "msg2 out grp uploading";
+    el.innerHTML = `
+      <div class="bubble2 has-att">
+        <div class="att-uploading">
+          ${isImg ? `<img class="up-thumb" src="${thumb}" alt="" />`
+            : isVid ? `<video class="up-thumb" src="${thumb}" muted></video>`
+            : `<span class="up-fileic">${Icon("file", { size: 20 })}</span>`}
+          <div class="up-ring"><svg viewBox="0 0 36 36"><circle class="up-track" cx="18" cy="18" r="16"/><circle class="up-bar" cx="18" cy="18" r="16"/></svg></div>
+          <span class="up-name">${esc(file.name)}</span>
+        </div>
+        <span class="wa-time">Uploading…</span>
+      </div>`;
+    if (thumb) el.dataset.objurl = thumb;
+    body.appendChild(el);
+    body.scrollTop = body.scrollHeight;
+    return el;
+  }
+  function setUploadProgress(el, frac) {
+    if (!el) return;
+    const bar = el.querySelector(".up-bar");
+    if (bar) { const len = 2 * Math.PI * 16; bar.style.strokeDasharray = len; bar.style.strokeDashoffset = len * (1 - Math.max(0, Math.min(1, frac))); }
+    const t = el.querySelector(".wa-time");
+    if (t) t.textContent = frac >= 1 ? "Processing…" : `Uploading… ${Math.round(frac * 100)}%`;
+  }
+  function markUploadFailed(el, name) {
+    if (!el) return;
+    const t = el.querySelector(".wa-time");
+    if (t) { t.textContent = "Upload failed"; t.style.color = "var(--neg)"; }
+    if (el.dataset.objurl) URL.revokeObjectURL(el.dataset.objurl);
   }
 
   // ─── Chat options menu (header kebab) ───
@@ -823,7 +945,10 @@
     if (!panel) {
       panel = document.createElement("aside");
       panel.id = "contact-panel";
-      document.getElementById("conv-center").appendChild(panel);
+      // Anchor to the whole conversation shell, not the centre pane. The centre
+      // pane narrows when the AI panel is open, which docked the panel to the
+      // MIDDLE of the screen on first open instead of the true right edge.
+      (document.querySelector(".conv-shell") || document.getElementById("conv-center")).appendChild(panel);
       document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeContactPanel(); });
     }
 
@@ -857,7 +982,7 @@
           <div class="cp-media-body"><div class="cp-loading">Loading…</div></div>
         </div>
         <div class="cp-block cp-actions">
-          <a class="cp-act" href="/client?id=${cl.id}">${Icon("users", { size: 15 })} Open full profile</a>
+          <a class="cp-act" href="/client?id=${cl.id}&from=conversations">${Icon("users", { size: 15 })} Open full profile</a>
           ${writable && view !== "archived" ? `
             <button class="cp-act danger" id="cp-clear">${Icon("eraser", { size: 15 })} Clear chat</button>
             <button class="cp-act" id="cp-archive">${Icon("archive", { size: 15 })} Archive chat</button>` : ""}
@@ -870,6 +995,11 @@
     const cpArch = panel.querySelector("#cp-archive");
     if (cpArch) cpArch.onclick = () => { closeContactPanel(); archiveClient(cl.id); };
 
+    // Force the browser to commit the off-screen closed state before showing, so
+    // the slide-in transition fires reliably on the very first open (a freshly
+    // inserted element otherwise snaps or lands mid-transition — the "middle" bug).
+    panel.classList.remove("show");
+    void panel.offsetWidth;
     panel.classList.add("show");
     scrim.classList.add("show");
     loadContactMedia(cl.id, panel);
@@ -934,7 +1064,7 @@
     }
     body.innerHTML = html;
     body.querySelectorAll("[data-img]").forEach((b) => b.onclick = () => openLightbox(b.dataset.img));
-    body.querySelectorAll("[data-vid]").forEach((b) => b.onclick = () => window.open(b.dataset.vid, "_blank", "noopener"));
+    body.querySelectorAll("[data-vid]").forEach((b) => b.onclick = () => openMedia(b.dataset.vid, "This video"));
   }
 
   // ─── Right panel: AI ───

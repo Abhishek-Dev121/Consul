@@ -59,23 +59,44 @@ function Icon(name, opts = {}) {
   return `<svg${cls} width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="${sw}" stroke-linecap="round" stroke-linejoin="round" style="${style}${opts.style || ""}">${ICONS[name] || ""}</svg>`;
 }
 
-// Per-platform icon + tint class, used by channel cards/pills.
-const PLATFORM_META = {
-  whatsapp: { icon: Icon("message"), tint: "tint-green" },
-  slack:    { icon: "#",  tint: "tint-violet" },
-  email:    { icon: Icon("mail"), tint: "tint-sky" },
-  upwork:   { icon: Icon("briefcase"), tint: "tint-green" },
-  telegram: { icon: Icon("send"), tint: "tint-sky" },
-  other:    { icon: Icon("link"), tint: "tint-blue" },
-};
-function platformMeta(p) { return PLATFORM_META[p] || PLATFORM_META.other; }
-
-// Channel brand colors (for dots/icons) shared across views.
+// Channel brand colors (for dots/icons) shared across views. Declared before the
+// glyph helper below, which resolves a channel's brand colour from here.
 const CHAN_COLORS = {
   whatsapp: "#25D366", upwork: "#108A00", slack: "#611F69",
   email: "#4A6CF7", telegram: "#229ED9", other: "#8A94A6",
 };
 const chanColor = (p) => CHAN_COLORS[p] || CHAN_COLORS.other;
+
+// Recognisable brand glyphs per platform (filled, inherit colour via fill).
+// Simplified marks — not exact logo artwork — rendered in each platform's colour.
+const PLATFORM_GLYPHS = {
+  whatsapp: '<path d="M12 2A10 10 0 0 0 3.5 17.2L2 22l4.9-1.4A10 10 0 1 0 12 2Zm0 18.2a8.2 8.2 0 0 1-4.2-1.2l-.3-.2-2.9.8.8-2.8-.2-.3A8.2 8.2 0 1 1 12 20.2Zm4.5-6.1c-.2-.1-1.5-.7-1.7-.8s-.4-.1-.5.1-.6.8-.8 1-.3.2-.5.1a6.7 6.7 0 0 1-2-1.2 7.4 7.4 0 0 1-1.3-1.7c-.1-.2 0-.4.1-.5l.4-.4.2-.4a.5.5 0 0 0 0-.4c0-.1-.5-1.3-.7-1.8s-.4-.4-.5-.4h-.5a1 1 0 0 0-.7.3A2.9 2.9 0 0 0 6.4 10a5 5 0 0 0 1.1 2.7 11.5 11.5 0 0 0 4.4 3.9c.6.3 1.1.4 1.5.5a3.6 3.6 0 0 0 1.6.1 2.7 2.7 0 0 0 1.8-1.3 2.3 2.3 0 0 0 .2-1.3c-.1-.1-.3-.2-.5-.3Z"/>',
+  slack: '<path d="M6 15.1a1.9 1.9 0 1 1-1.9-1.9H6v1.9Zm1 0a1.9 1.9 0 0 1 3.8 0v4.8a1.9 1.9 0 0 1-3.8 0v-4.8Z"/><path d="M8.9 6a1.9 1.9 0 1 1 1.9-1.9V6H8.9Zm0 1a1.9 1.9 0 0 1 0 3.8H4.1a1.9 1.9 0 0 1 0-3.8h4.8Z"/><path d="M18 8.9a1.9 1.9 0 1 1 1.9 1.9H18V8.9Zm-1 0a1.9 1.9 0 0 1-3.8 0V4.1a1.9 1.9 0 0 1 3.8 0v4.8Z"/><path d="M15.1 18a1.9 1.9 0 1 1-1.9 1.9V18h1.9Zm0-1a1.9 1.9 0 0 1 0-3.8h4.8a1.9 1.9 0 0 1 0 3.8h-4.8Z"/>',
+  telegram: '<path d="M21.9 4.3 2.9 11.6c-.9.3-.9 1-.1 1.3l4.8 1.5 1.8 5.9c.2.5.4.6.9.3l2.7-2 4.9 3.6c.5.3.9.1 1-.5l3.4-16c.2-.7-.3-1-1.3-.7Zm-3.5 3.4-8.5 7.7-.3 3.6-1.4-4.5 9.9-6.5c.4-.3.8.1.3.5Z"/>',
+  upwork: '<path d="M17.6 9.2a3.5 3.5 0 0 0-3.3 2.6c-.5-.8-.9-1.8-1.1-2.6h-2v3.1a1.6 1.6 0 0 1-3.2 0V9.2H5.9v3.1a3.6 3.6 0 0 0 6.5 2.1c.4.9 1.2 1.9 2.9 1.9a3.6 3.6 0 1 0 .3-7.1Zm-.1 5.2a1.7 1.7 0 0 1-1.6-1.6l.1-.6c.2-.7.8-1.1 1.5-1.1a1.65 1.65 0 0 1 0 3.3Z"/>',
+  email: '<path d="M4 4h16a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2Zm0 2 8 5.5L20 6H4Zm16 2.3-8 5.5-8-5.5V18h16V8.3Z"/>',
+  other: '<path d="M10 13a5 5 0 0 0 7 0l2.5-2.5a5 5 0 0 0-7-7L11 5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M14 11a5 5 0 0 0-7 0l-2.5 2.5a5 5 0 0 0 7 7L13 19" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>',
+};
+
+// A channel icon in its own brand colour. `mono` renders it in the current text
+// colour instead (e.g. on a coloured background).
+function channelIcon(platform, size = 14, mono = false) {
+  const p = PLATFORM_GLYPHS[platform] ? platform : "other";
+  const color = mono ? "currentColor" : chanColor(p);
+  return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="${color}" style="vertical-align:-2px;flex:none">${PLATFORM_GLYPHS[p]}</svg>`;
+}
+
+// Per-platform icon + tint class, used by channel cards/pills.
+const PLATFORM_META = {
+  whatsapp: { icon: channelIcon("whatsapp", 16, true), tint: "tint-green" },
+  slack:    { icon: channelIcon("slack", 16, true),    tint: "tint-violet" },
+  email:    { icon: channelIcon("email", 16, true),    tint: "tint-sky" },
+  upwork:   { icon: channelIcon("upwork", 16, true),   tint: "tint-green" },
+  telegram: { icon: channelIcon("telegram", 16, true), tint: "tint-sky" },
+  other:    { icon: channelIcon("other", 16, true),    tint: "tint-blue" },
+};
+function platformMeta(p) { return PLATFORM_META[p] || PLATFORM_META.other; }
+
 const platformName = (p) => ({ whatsapp: "WhatsApp", upwork: "Upwork", slack: "Slack",
   email: "Email", telegram: "Telegram", other: "Other" }[p] || "Other");
 

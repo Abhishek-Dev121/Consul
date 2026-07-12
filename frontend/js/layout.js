@@ -26,19 +26,19 @@ const NAV = [
 
 let CURRENT_USER = null;
 
-// Collapse/expand the desktop sidebar. Sets the inline flex-basis/width directly
-// (in addition to toggling the class used for the rest of the collapsed styling).
-// max-width/min-width are set explicitly too: some descendant's min-content size
-// otherwise creates an implicit floor that keeps the flex item from actually
-// shrinking below it even with flex-shrink/flex-basis set.
+// Collapse/expand the desktop sidebar. The rail is `position: fixed`, so it is
+// out of flow and the old flex-basis juggling is no longer needed — the class
+// alone drives both the rail width and `.main`'s margin (see app.css).
 function setNavCollapsed(shell, collapsed) {
   shell.classList.toggle("nav-collapsed", collapsed);
   const sidebar = document.querySelector(".sidebar");
   if (sidebar) {
-    sidebar.style.flex = collapsed ? "0 0 74px" : "";
+    // Clear the inline styles a previous version left behind, or they would
+    // override the stylesheet forever.
+    sidebar.style.flex = "";
+    sidebar.style.maxWidth = "";
+    sidebar.style.minWidth = "";
     sidebar.style.width = collapsed ? "74px" : "";
-    sidebar.style.maxWidth = collapsed ? "74px" : "";
-    sidebar.style.minWidth = collapsed ? "0" : "";
   }
 }
 

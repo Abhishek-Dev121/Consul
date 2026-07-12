@@ -62,11 +62,23 @@ def save_bytes(data: bytes, filename: str, prefix: str = "files") -> str:
     return key
 
 
+class StoredFileMissing(FileNotFoundError):
+    """The DB row exists but the underlying bytes are gone (e.g. a region migration
+    that copied the database but not the local uploads)."""
+
+
 def read_bytes(key: str) -> bytes:
     if settings.storage_backend == "s3":
-        obj = _s3_client().get_object(Bucket=settings.s3_bucket, Key=key)
+        try:
+            obj = _s3_client().get_object(Bucket=settings.s3_bucket, Key=key)
+        except _s3_client().exceptions.NoSuchKey as e:
+            raise StoredFileMissing(key) from e
         return obj["Body"].read()
-    return (Path(settings.local_storage_dir) / key).read_bytes()
+    path = Path(settings.local_storage_dir) / key
+    if not path.is_file():
+        # Surface a typed error so the router can answer 404, not an opaque 500.
+        raise StoredFileMissing(key)
+    return path.read_bytes()
 
 
 def local_path(key: str) -> str | None:
