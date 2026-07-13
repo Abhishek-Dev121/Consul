@@ -979,6 +979,7 @@ body { transition: background-color .2s ease, color .2s ease; }
    Global request progress bar — perceived-speed feedback for every API call
    =========================================================================== */
 #api-progress {
+  display: none !important;
   position: fixed; top: 0; left: 0; height: 3px; width: 0%;
   background: linear-gradient(90deg, var(--brand), var(--violet));
   z-index: 2000; opacity: 0; pointer-events: none;

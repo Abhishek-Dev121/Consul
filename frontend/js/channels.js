@@ -1,25 +1,23 @@
 (async function () {
   const actions = `<div class="d-flex gap-2">
-    <button class="btn btn-soft" id="new-channel" data-bs-toggle="modal" data-bs-target="#channelModal">+ Channel</button>
-    <button class="btn btn-primary" id="new-client" data-bs-toggle="modal" data-bs-target="#clientModal">+ Client</button>
+    <button class="btn btn-primary" id="new-channel" data-bs-toggle="modal" data-bs-target="#channelModal">+ Channel</button>
   </div>`;
-  await renderLayout("/channels", "Channel Management", { crumb: "Workspace", actions });
-  const admin = isAdmin();
-  if (!admin) { const b = document.getElementById("new-channel"); if (b) b.remove(); }
-  if (!canWrite()) { const b = document.getElementById("new-client"); if (b) b.remove(); }
 
   const PLATFORMS = ["whatsapp", "upwork", "slack", "email", "telegram", "other"];
   let channels = [], allClients = [], users = [];
-  let typeFilter = "all", userFilter = "", searchTerm = "";
+  let typeFilter = "all", userFilter = "", searchTerm = "", admin = false;
 
   function contactsFor(id) { return allClients.filter((c) => c.channels.some((ch) => ch.id === id)); }
 
   async function loadData() {
-    [channels, allClients, users] = await Promise.all([
+    const [chResult, clResult, uResult] = await Promise.all([
       Api.get("/api/channels"),
       Api.get("/api/clients"),
-      Api.get("/api/users").catch(() => []),
+      Api.get("/api/users").catch(() => ({ items: [] })),
     ]);
+    channels = chResult || [];
+    allClients = clResult || [];
+    users = uResult && uResult.items ? uResult.items : [];
   }
 
   // ---- Filters UI ----
@@ -120,7 +118,17 @@
   });
 
   // ---- Init ----
-  await loadData();
+  const layoutPromise = renderLayout("/channels", "Channel Management", { crumb: "Workspace", actions });
+  const dataPromise = loadData();
+
+  await Promise.all([layoutPromise, dataPromise]);
+
+  admin = isAdmin();
+  if (!admin) {
+    const b = document.getElementById("new-channel");
+    if (b) b.remove();
+  }
+
   renderFilters();
   refreshClientChannelOptions();
   renderGrid();

@@ -154,6 +154,26 @@
   let presenceTimer = null, typingSentAt = 0;
   let replyingTo = null, selectMode = false, selected = new Set();
 
+  // ── WhatsApp-style download state tracking (localStorage keyed by msgId) ──
+  const DL_PREFIX = "att_dl_";
+  function isDownloaded(msgId) {
+    return !!localStorage.getItem(DL_PREFIX + msgId);
+  }
+  function setDownloaded(msgId) {
+    localStorage.setItem(DL_PREFIX + msgId, "1");
+  }
+  // Temporary upload placeholder IDs (negative numbers so they never clash with DB ids)
+  let _tempIdSeq = -1;
+  function _nextTempId() { return --_tempIdSeq; }
+
+  // ── Friendly file-size label ──
+  function fmtSize(bytes) {
+    if (!bytes) return "";
+    if (bytes < 1024) return bytes + " B";
+    if (bytes < 1048576) return (bytes / 1024).toFixed(0) + " KB";
+    return (bytes / 1048576).toFixed(1) + " MB";
+  }
+
   // ── Presence + typing + read receipts (team-scoped, light polling) ──
   function markRead(clientId) { Api.post(`/api/clients/${clientId}/read`).catch(() => {}); }
 
@@ -394,28 +414,101 @@
           const extLower = (m.attachment_name || "").toLowerCase();
           const isVideo = [".mp4", ".mov", ".m4v", ".webm", ".avi", ".mkv"].some((e) => extLower.endsWith(e));
           const isImage = [".png", ".jpg", ".jpeg", ".gif", ".webp"].some((e) => extLower.endsWith(e));
+          const sizeLbl = fmtSize(m.attachment_size);
+
+          // Has the receiver already downloaded (opened) this attachment?
+          const downloaded = isDownloaded(m.id);
+          // Is this message a temporary upload placeholder (client-side only)?
+          const isUploading = m._uploading === true;
 
           let content, hasAtt = false;
-          if (m.attachment_type === "audio" && isVideo) {
+
+          // ── State 1: uploading (sender-side progress bubble) ──
+          if (isUploading) {
+            hasAtt = true;
+            content = `<div class="att-uploading" id="upl-${m._tempId}">
+              <div class="att-upl-spinner">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/></svg>
+              </div>
+              <div class="upl-info">
+                <div class="upl-name">${esc(m.attachment_name || "Uploading…")}</div>
+                <div class="att-upload-track"><div class="att-upload-fill" style="width:${m._progress || 0}%"></div></div>
+                <div class="att-upload-pct">${m._progress || 0}%</div>
+              </div>
+            </div>`;
+
+          // ── State 2: audio/video — downloaded (rendered inline) ──
+          } else if (m.attachment_type === "audio" && isVideo && (m.mine || downloaded)) {
             hasAtt = true;
             content = `<div class="att-video"><video controls preload="metadata" src="${esc(url)}" style="max-width:100%;width:280px;border-radius:6px;display:block;"></video></div>`;
-          } else if (m.attachment_type === "audio") {
+
+          // ── State 2b: audio/video — not yet downloaded (receiver badge) ──
+          } else if (m.attachment_type === "audio" && isVideo && !m.mine && !downloaded) {
+            hasAtt = true;
+            content = `<div class="att-dl-badge" data-dl-id="${m.id}" data-dl-url="${esc(url)}" data-dl-type="video" title="Tap to download">
+              <div class="dl-circle">
+                <svg width="22" height="22" fill="none" stroke="white" stroke-width="2" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+              </div>
+              <div class="dl-size-lbl">${sizeLbl || "Video"}</div>
+            </div>`;
+
+          // ── State 2c: audio — downloaded ──
+          } else if (m.attachment_type === "audio" && (m.mine || downloaded)) {
             hasAtt = true;
             content = `<div class="att-audio"><audio controls preload="none" src="${esc(url)}"></audio></div>`;
+
+          // ── State 2d: audio — receiver badge ──
+          } else if (m.attachment_type === "audio" && !m.mine && !downloaded) {
+            hasAtt = true;
+            content = `<div class="att-dl-badge" data-dl-id="${m.id}" data-dl-url="${esc(url)}" data-dl-type="audio" title="Tap to download">
+              <div class="dl-circle">
+                <svg width="22" height="22" fill="none" stroke="white" stroke-width="2" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+              </div>
+              <div class="dl-size-lbl">${sizeLbl || "Audio"}</div>
+            </div>`;
+
+          // ── State 3: image — always render inline (small payload) ──
           } else if (m.attachment_type === "file" && isImage) {
             hasAtt = true;
             content = `<div class="att-image"><img class="att-img" data-url="${esc(url)}" src="${esc(url)}" style="max-width:100%;width:280px;max-height:280px;object-fit:cover;border-radius:6px;display:block;cursor:pointer;" /></div>`;
-          } else if (m.attachment_type === "file") {
+
+          // ── State 4: file — sender sees a "sent" card with ✓ ──
+          } else if (m.attachment_type === "file" && m.mine) {
             hasAtt = true;
             const ext = isExternal ? "LINK" : (m.attachment_name || "file").split(".").pop().toUpperCase().slice(0, 4);
-            content = `<a class="att-file" href="${esc(url)}" target="_blank" rel="noopener">
+            content = `<a class="att-sent-card" href="${esc(url)}" target="_blank" rel="noopener">
               <div class="file-ic">${ext}</div>
+              <div class="file-info">
+                <div class="file-name">${esc(m.attachment_name || "Download")}</div>
+                <div class="file-sub">${sizeLbl || "Sent"}</div>
+              </div>
+              <span class="sent-tick">✓</span>
+            </a>`;
+
+          // ── State 5: file — receiver sees download badge ──
+          } else if (m.attachment_type === "file" && !m.mine && !isExternal && !downloaded) {
+            hasAtt = true;
+            const ext2 = (m.attachment_name || "file").split(".").pop().toUpperCase().slice(0, 4);
+            content = `<div class="att-dl-badge" data-dl-id="${m.id}" data-dl-url="${esc(url)}" data-dl-type="file" data-dl-ext="${esc(ext2)}" data-dl-name="${esc(m.attachment_name || "")}" title="Tap to download">
+              <div class="dl-circle">
+                <svg width="22" height="22" fill="none" stroke="white" stroke-width="2" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+              </div>
+              <div class="dl-size-lbl">${sizeLbl || ext2}</div>
+            </div>`;
+
+          // ── State 6: file — receiver already downloaded (link card) ──
+          } else if (m.attachment_type === "file") {
+            hasAtt = true;
+            const ext3 = isExternal ? "LINK" : (m.attachment_name || "file").split(".").pop().toUpperCase().slice(0, 4);
+            content = `<a class="att-file" href="${esc(url)}" target="_blank" rel="noopener">
+              <div class="file-ic">${ext3}</div>
               <div class="file-info">
                 <div class="file-name">${esc(m.attachment_name || "Download")}</div>
                 <div class="file-sub">${isExternal ? "Open link" : "Download"}</div>
               </div>
               <svg class="dl-ic" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
             </a>`;
+
           } else {
             content = esc(m.body);
           }
@@ -457,6 +550,26 @@
         // Delegated image click → WhatsApp-style lightbox (no inline onclick = no XSS).
         body.querySelectorAll(".att-img").forEach((img) =>
           img.addEventListener("click", () => openLightbox(img.dataset.url)));
+
+        // ── Download badge: click → brief spinner → mark downloaded → re-render ──
+        body.querySelectorAll(".att-dl-badge").forEach((badge) => {
+          badge.addEventListener("click", async () => {
+            const msgId = badge.dataset.dlId;
+            const dlUrl  = badge.dataset.dlUrl;
+            const dlType = badge.dataset.dlType; // file | audio | video
+            if (!msgId || !dlUrl) return;
+
+            // Show spinner inside the circle
+            const circle = badge.querySelector(".dl-circle");
+            if (circle) circle.innerHTML = `<span class="spinner-border spinner-border-sm" style="color:#fff;width:18px;height:18px;"></span>`;
+            badge.style.pointerEvents = "none";
+
+            // Tiny delay (UX feedback), then mark as downloaded and re-render
+            await new Promise((r) => setTimeout(r, 600));
+            setDownloaded(msgId);
+            await renderThread();
+          });
+        });
       }
     } catch (e) { toast(e.message); }
   }
@@ -687,28 +800,139 @@
     const text = (ta.value || "").trim();
     if (!text && !pendingAttachments.length) return;
     const cl = clients.find((x) => x.id === active);
+    const body = document.getElementById("th2-body");
     try {
-      // Send text first (carrying the quoted-reply target, if any).
+      // 1. Send text message first using Optimistic UI updates
       if (text) {
-        await Api.post(`/api/clients/${cl.id}/messages`, { body: text, reply_to_id: replyingTo ? replyingTo.id : null });
         ta.value = "";
         ta.style.height = "auto";
+        const replyTgt = replyingTo;
         clearReply();
-      }
-      // Then upload each attachment — this endpoint classifies by file type and
-      // routes video/audio to the audio folder, everything else to documents.
-      for (const file of pendingAttachments) {
-        const fd = new FormData();
-        fd.append("upload", file);
-        try {
-          await Api.postForm(`/api/clients/${cl.id}/messages/upload`, fd);
-        } catch (e) {
-          toast("Could not upload " + file.name + ": " + e.message);
+
+        // Create and append an optimistic "sending" bubble immediately
+        const tempId = _nextTempId();
+        const div = document.createElement("div");
+        div.className = "msg2 out grp";
+        div.id = "opt-wrap-" + tempId;
+
+        const quote = replyTgt
+          ? `<div class="reply-quote"><span class="rq-sender">${esc(replyTgt.sender_name)}</span><span class="rq-text">${esc(replyTgt.body || replyTgt.attachment_name || "Attachment")}</span></div>`
+          : "";
+
+        const timeStr = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+        const tick = `<span class="tick" title="Sending..."><svg width="15" height="14" viewBox="0 0 18 14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="opacity: 0.5;"><path d="M2 7.5l4 4L15 3"/></svg></span>`;
+
+        div.innerHTML = `<span class="msg-check"></span>
+          <div class="bubble2" style="opacity: 0.65;">
+            ${quote}
+            ${esc(text)}
+            <span class="wa-time">${timeStr}${tick}</span>
+          </div>`;
+
+        if (body) {
+          // Clear empty state if it's there
+          if (body.querySelector(".conv-empty-state")) {
+            body.innerHTML = "";
+          }
+          body.appendChild(div);
+          body.scrollTop = body.scrollHeight;
         }
+
+        // Fire request in the background
+        Api.post(`/api/clients/${cl.id}/messages`, { body: text, reply_to_id: replyTgt ? replyTgt.id : null })
+          .then(async () => {
+            // Re-render the thread first. This fetches the new messages from the database
+            // and draws them in the container.
+            await renderThread();
+            // Then remove the optimistic placeholder (if it hasn't been replaced by innerHTML).
+            const opt = document.getElementById("opt-wrap-" + tempId);
+            if (opt) opt.remove();
+          })
+          .catch((e) => {
+            toast("Failed to send message: " + e.message);
+            ta.value = text;
+            const opt = document.getElementById("opt-wrap-" + tempId);
+            if (opt) opt.remove();
+          });
       }
+
+      // 2. Upload attachments with XHR so we can track progress.
+      const filesToUpload = [...pendingAttachments];
       pendingAttachments = [];
       renderAttPreviews();
-      await renderThread();
+
+      for (const file of filesToUpload) {
+        const tempId = _nextTempId();
+
+        // Insert a temporary uploading placeholder bubble into the thread.
+        const placeholder = { _uploading: true, _tempId: tempId, _progress: 0,
+          id: tempId, is_client: false, mine: true, sender_name: "You",
+          attachment_name: file.name, attachment_type: "file", body: "",
+          sent_at: new Date().toISOString(), created_at: new Date().toISOString() };
+
+        // Render placeholder immediately.
+        if (body) {
+          const div = document.createElement("div");
+          div.className = "msg2 out grp";
+          div.id = "upl-wrap-" + tempId;
+          div.innerHTML = `<span class="msg-check"></span>
+            <div class="bubble2 has-att">
+              <div class="att-uploading" id="upl-${tempId}">
+                <div class="att-upl-spinner">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/></svg>
+                </div>
+                <div class="upl-info">
+                  <div class="upl-name">${esc(file.name)}</div>
+                  <div class="att-upload-track"><div class="att-upload-fill" id="upl-fill-${tempId}" style="width:0%"></div></div>
+                  <div class="att-upload-pct" id="upl-pct-${tempId}">0%</div>
+                </div>
+              </div>
+            </div>`;
+          body.appendChild(div);
+          body.scrollTop = body.scrollHeight;
+        }
+
+        // Upload via XHR with progress tracking.
+        await new Promise((resolve, reject) => {
+          const xhr = new XMLHttpRequest();
+          const fd = new FormData();
+          fd.append("upload", file);
+          xhr.open("POST", `/api/clients/${cl.id}/messages/upload`);
+          const tok = Api.token();
+          if (tok) xhr.setRequestHeader("Authorization", "Bearer " + tok);
+
+          xhr.upload.onprogress = (ev) => {
+            if (!ev.lengthComputable) return;
+            const pct = Math.round((ev.loaded / ev.total) * 100);
+            const fill = document.getElementById("upl-fill-" + tempId);
+            const pctEl = document.getElementById("upl-pct-" + tempId);
+            if (fill) fill.style.width = pct + "%";
+            if (pctEl) pctEl.textContent = pct + "%";
+          };
+
+          xhr.onload = () => {
+            if (xhr.status >= 200 && xhr.status < 300) {
+              // Remove placeholder and re-render from server.
+              const wrap = document.getElementById("upl-wrap-" + tempId);
+              if (wrap) wrap.remove();
+              resolve();
+            } else {
+              const wrap = document.getElementById("upl-wrap-" + tempId);
+              if (wrap) wrap.remove();
+              reject(new Error("Upload failed: " + xhr.statusText));
+            }
+          };
+          xhr.onerror = () => {
+            const wrap = document.getElementById("upl-wrap-" + tempId);
+            if (wrap) wrap.remove();
+            reject(new Error("Network error during upload"));
+          };
+          xhr.send(fd);
+        }).catch((e) => toast("Could not upload " + file.name + ": " + e.message));
+
+        // Refresh thread after each file so the server-rendered bubble shows up.
+        await renderThread();
+      }
     } catch (e) { toast(e.message); }
   }
 

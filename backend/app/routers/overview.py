@@ -323,6 +323,10 @@ def clients_overview(archived: bool = False, db: Session = Depends(get_db), user
 
 @router.get("/reports/overview")
 def reports_overview(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    cache_key = f"reports:{user.id}"
+    cached = ttl_cache.get(cache_key)
+    if cached is not None:
+        return cached
     clients = _accessible_client_meta(db, user)
     cids = [c.id for c in clients] or [-1]
     cname = {c.id: c.name for c in clients}

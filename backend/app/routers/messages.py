@@ -1,3 +1,4 @@
+import os
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -100,6 +101,23 @@ def list_messages(client_id: int, db: Session = Depends(get_db), user: User = De
     files = [f for f in files if _kept(f.created_at)]
     audios = [a for a in audios if _kept(a.created_at)]
 
+    # Build size maps from ALL file/audio rows (before the chat-clear filter) so
+    # that composer-uploaded attachments — whose URLs are already in existing_urls
+    # and therefore excluded from the "orphan" merge below — still have sizes.
+    from app.services import storage_service as _ss
+    all_files_raw = db.execute(
+        select(FileRecord).where(FileRecord.client_id == client_id)
+    ).scalars().all()
+    all_audios_raw = db.execute(
+        select(AudioRecording).where(AudioRecording.client_id == client_id)
+    ).scalars().all()
+    file_sizes: dict[int, int] = {f.id: (f.size or 0) for f in all_files_raw}
+    audio_sizes: dict[int, int] = {}
+    for _a in all_audios_raw:
+        _path = _ss.local_path(_a.storage_key)
+        if _path and os.path.exists(_path):
+            audio_sizes[_a.id] = os.path.getsize(_path)
+
     merged = list(messages)
 
     for f in files:
@@ -117,6 +135,7 @@ def list_messages(client_id: int, db: Session = Depends(get_db), user: User = De
                 "attachment_type": "file",
                 "attachment_url": url,
                 "attachment_name": f.filename,
+                "attachment_size": file_sizes.get(f.id),
                 "sent_at": f.created_at,
                 "created_at": f.created_at,
                 "created_by": f.uploaded_by,
@@ -126,11 +145,6 @@ def list_messages(client_id: int, db: Session = Depends(get_db), user: User = De
         url = f"/api/audio/{a.id}/download"
         if url not in existing_urls:
             sender = uname.get(a.uploaded_by, "Team Member")
-            
-            # Check if this audio recording is actually a video based on extension
-            ext = a.filename.lower()
-            is_video = any(ext.endswith(v_ext) for v_ext in [".mp4", ".mov", ".m4v", ".webm", ".avi", ".mkv"])
-            
             merged.append({
                 "id": -100000 - a.id,
                 "client_id": a.client_id,
@@ -139,9 +153,10 @@ def list_messages(client_id: int, db: Session = Depends(get_db), user: User = De
                 "sender_name": sender,
                 "body": "",
                 "is_client": False,
-                "attachment_type": "audio" if not is_video else "audio",  # Keep audio type for conversations UI mapping but JS checks extension
+                "attachment_type": "audio",
                 "attachment_url": url,
                 "attachment_name": a.filename,
+                "attachment_size": audio_sizes.get(a.id),
                 "sent_at": a.created_at,
                 "created_at": a.created_at,
                 "created_by": a.uploaded_by,
@@ -166,7 +181,7 @@ def list_messages(client_id: int, db: Session = Depends(get_db), user: User = De
         when = _aware(when)
         if when is None:
             return False
-        return any(uid != sender_id and _aware(lr) >= when for uid, lr in reads)
+        return any(uid != sender_id and lr is not None and _aware(lr) >= when for uid, lr in reads)
 
     for m in merged:
         if isinstance(m, Message):
@@ -177,6 +192,18 @@ def list_messages(client_id: int, db: Session = Depends(get_db), user: User = De
             if m.deleted:  # don't leak deleted content — show the placeholder
                 m.body = ""
                 m.attachment_type = m.attachment_url = m.attachment_name = None
+            # Resolve attachment_size for messages uploaded via the chat composer.
+            # Use getattr() — attachment_size is NOT a mapped column on Message.
+            if m.attachment_url and not getattr(m, 'attachment_size', None):
+                try:
+                    if "/api/files/" in m.attachment_url:
+                        fid = int(m.attachment_url.split("/api/files/")[1].split("/")[0])
+                        m.attachment_size = file_sizes.get(fid)
+                    elif "/api/audio/" in m.attachment_url:
+                        aid = int(m.attachment_url.split("/api/audio/")[1].split("/")[0])
+                        m.attachment_size = audio_sizes.get(aid)
+                except (ValueError, IndexError):
+                    pass
         else:
             m["read"] = (not m["is_client"]) and _is_read(m.get("sent_at") or m.get("created_at"), m.get("created_by"))
             m["mine"] = m.get("created_by") is not None and m.get("created_by") == user.id
