@@ -1007,20 +1007,8 @@ body { transition: background-color .2s ease, color .2s ease; }
 /* ===========================================================================
    Global request progress bar — perceived-speed feedback for every API call
    =========================================================================== */
-#api-progress {
-  display: none !important;
-  position: fixed; top: 0; left: 0; height: 3px; width: 0%;
-  background: linear-gradient(90deg, var(--brand), var(--violet));
-  z-index: 2000; opacity: 0; pointer-events: none;
-  box-shadow: 0 0 8px var(--brand-soft);
-  transition: opacity .2s ease;
-}
-#api-progress.show { opacity: 1; animation: api-progress-grow 1.1s ease-in-out infinite; }
-@keyframes api-progress-grow {
-  0%   { width: 0%;  margin-left: 0; }
-  55%  { width: 62%; }
-  100% { width: 0%;  margin-left: 100%; }
-}
+/* Hidden by request. The JS still creates/toggles it, but it never renders. */
+#api-progress { display: none !important; }
 
 /* ===========================================================================
    Tactile micro-interactions — press feedback, snappier hovers (no new colors)
@@ -2063,3 +2051,64 @@ a.chan-name.stretch:focus-visible { outline: none; }
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 240px;
 }
 .msg2.uploading .wa-time { opacity: .9; }
+
+/* ── Create-new-platform panel (Create channel modal) ── */
+.np-panel {
+  margin-top: 14px; padding: 14px;
+  border: 1px dashed var(--line); border-radius: 10px;
+  background: var(--surface-2);
+}
+.np-panel .np-title { font-size: 12px; font-weight: 700; letter-spacing: .3px; text-transform: uppercase; color: var(--muted); margin-bottom: 10px; }
+.np-panel .np-req { color: var(--neg); }
+.np-logo-row { display: flex; align-items: center; gap: 14px; }
+.np-logo-preview {
+  width: 52px; height: 52px; flex: none;
+  border-radius: 12px; border: 1px solid var(--line);
+  background: var(--surface) center/cover no-repeat;
+  display: grid; place-items: center; color: var(--muted-2); overflow: hidden;
+}
+.np-logo-preview.empty::after { content: "Logo"; font-size: 10px; font-weight: 600; }
+.np-logo-actions { display: flex; flex-direction: column; gap: 5px; }
+.np-logo-hint { font-size: 11px; color: var(--muted-2); }
+
+/* Clickable task rows + the task-detail popup */
+.cd-task-table tr.cd-task-row { cursor: pointer; transition: background .12s; }
+.cd-task-table tr.cd-task-row:hover { background: var(--surface-2); }
+.task-meta-grid {
+  display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px 20px;
+}
+@media (max-width: 560px) { .task-meta-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.tm-lab { font-size: 11px; font-weight: 700; letter-spacing: .4px; text-transform: uppercase; color: var(--muted-2); margin-bottom: 4px; }
+.task-desc-full {
+  margin-top: 6px; font-size: 13.5px; line-height: 1.6; color: var(--text);
+  white-space: pre-wrap; word-break: break-word;
+  background: var(--surface-2); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px;
+}
+
+/* Client status dropdown on the profile hero */
+.cd-status { position: relative; display: inline-block; }
+.cd-status-btn { cursor: pointer; border: none; display: inline-flex; align-items: center; gap: 4px; }
+.cd-status-btn:hover { filter: brightness(.97); }
+.cd-status-menu {
+  position: absolute; top: calc(100% + 6px); left: 0; z-index: 40;
+  min-width: 190px; padding: 6px;
+  background: var(--surface); border: 1px solid var(--line); border-radius: 12px;
+  box-shadow: var(--sh-m);
+}
+.cd-status-item {
+  display: flex; align-items: center; gap: 8px; width: 100%;
+  padding: 7px 8px; border: none; background: transparent; border-radius: 8px; cursor: pointer;
+}
+.cd-status-item:hover { background: var(--surface-2); }
+.cd-status-item.on { background: var(--brand-soft); }
+
+/* Inline "create channel" panel inside the New Client modal */
+.cnc-panel {
+  margin-top: 10px; padding: 14px;
+  border: 1px solid var(--line); border-radius: 12px;
+  background: var(--surface-2);
+}
+.cnc-panel .cnc-title { font-size: 12px; font-weight: 700; letter-spacing: .3px; text-transform: uppercase; color: var(--muted); margin-bottom: 10px; }
+.cnc-panel .cnc-label { display: block; font-size: 12px; font-weight: 500; color: var(--muted); margin-bottom: 4px; }
+/* When nested inside the channel panel, the platform sub-panel is a plain inset. */
+.cnc-panel .np-panel { background: var(--surface); }

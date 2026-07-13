@@ -41,5 +41,10 @@ class Client(Base):
     # and the conversation->messages backfill won't resurrect it.
     chat_cleared_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
+    # Archive marker. Archiving is a first-class property of the client (not derived
+    # from its conversations) so a client with no conversations can still be archived.
+    # Set = in the Archive and hidden from the active list; NULL = active.
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
     assignees = relationship("User", secondary=client_assignments, lazy="selectin")
     channels = relationship("Channel", secondary=client_channels, lazy="selectin")

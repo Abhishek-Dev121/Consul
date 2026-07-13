@@ -18,6 +18,69 @@
   const platOf = (cl) => (cl.channels && cl.channels[0] && cl.channels[0].platform) || "other";
   const _ns = (s) => (!s ? "neu" : s.toLowerCase().includes("pos") ? "pos" : s.toLowerCase().includes("neg") ? "neg" : "neu");
 
+  // Colour the file-attachment badge by type so a PDF/sheet/doc is recognisable at a glance.
+  function fileIcColor(ext) {
+    const e = (ext || "").toLowerCase();
+    if (e === "pdf") return "#E4483C";
+    if (["doc", "docx"].includes(e)) return "#2B6BEF";
+    if (["xls", "xlsx", "csv"].includes(e)) return "#1E9E5A";
+    if (["ppt", "pptx"].includes(e)) return "#D24726";
+    if (["zip", "rar", "7z"].includes(e)) return "#8B5CF6";
+    if (["txt", "rtf"].includes(e)) return "#64748B";
+    return "var(--brand)";   // links and anything else
+  }
+
+  // ─── Client status (Active / Inactive / Lead) ───
+  const STATUS_OPTS = [
+    { key: "active", label: "Active", cls: "st-active" },
+    { key: "inactive", label: "Inactive", cls: "st-done" },
+    { key: "lead", label: "Lead", cls: "st-hold" },
+  ];
+  const statusMeta = (s) => {
+    const v = (s || "").toLowerCase();
+    return STATUS_OPTS.find((o) => o.key === v)
+      || ((v.includes("inactive") || v.includes("closed") || v.includes("archiv")) ? STATUS_OPTS[1] : STATUS_OPTS[0]);
+  };
+  const canEditStatus = isAdmin();   // Admin + Super Admin
+
+  // Inner markup for the header status control (a pill that opens a dropdown).
+  function statusControlHTML(cl) {
+    const m = statusMeta(cl.status);
+    const items = STATUS_OPTS.map((o) =>
+      `<button type="button" class="cd-status-item ${o.key === m.key ? "on" : ""}" data-status="${o.key}">
+         <span class="st ${o.cls}" style="pointer-events:none"><span class="sd"></span>${o.label}</span>
+         ${o.key === m.key ? Icon("check", { size: 14, style: "margin-left:auto;color:var(--brand)" }) : ""}
+       </button>`).join("");
+    return `<button type="button" class="st ${m.cls} cd-status-btn" id="th2-status-btn" title="Change client status" aria-haspopup="true">
+        <span class="sd"></span>${m.label} ${Icon("chevronDown", { size: 12, style: "margin-left:1px" })}
+      </button>
+      <div class="cd-status-menu" id="th2-status-menu" hidden style="right:0;left:auto">${items}</div>`;
+  }
+
+  function wireStatusControl(cl) {
+    const btn = document.getElementById("th2-status-btn");
+    if (!btn) return;
+    const menu = document.getElementById("th2-status-menu");
+    btn.onclick = (e) => { e.stopPropagation(); menu.hidden = !menu.hidden; };
+    menu.querySelectorAll("[data-status]").forEach((b) =>
+      b.onclick = (e) => { e.stopPropagation(); menu.hidden = true; setClientStatus(cl.id, b.dataset.status); });
+    document.addEventListener("click", () => { if (menu) menu.hidden = true; });
+  }
+
+  async function setClientStatus(id, newStatus) {
+    const cl = clients.find((c) => c.id === id);
+    if (!cl || (cl.status || "").toLowerCase() === newStatus) return;
+    const prev = cl.status;
+    try {
+      await Api.patch(`/api/clients/${id}`, { status: newStatus });
+      cl.status = newStatus;
+      Api.invalidateCache("/api/overview/clients");   // dashboards/lists show status too
+      const wrap = document.getElementById("th2-status");
+      if (wrap) { wrap.innerHTML = statusControlHTML(cl); wireStatusControl(cl); }
+      toast("Client status updated", "success");
+    } catch (e) { cl.status = prev; toast(e.message); }
+  }
+
   // ─── Left panel ───
   function renderArchiveToggle() {
     const btn = document.getElementById("archive-toggle");
@@ -52,8 +115,30 @@
 
   async function load() {
     try {
-      clients = await Api.get(`/api/overview/clients?archived=${view === "archived"}`);
+      // Always fresh: after a send/receive the ordering + unread badges must be
+      // current, not a stale cached copy.
+      Api.invalidateCache("/api/overview/clients");
+      clients = await Api.get(`/api/overview/clients?archived=${view === "archived"}`, { stale: false });
     } catch (e) { toast(e.message); clients = []; }
+    renderList();
+  }
+
+  // Fingerprint of what the list shows: order + unread badge + latest activity.
+  // The background poll only re-renders when this actually changes, so it never
+  // disrupts a click or the search box while nothing new has happened.
+  function clientsSig(list) {
+    return list.map((c) => `${c.id}:${c.unread_count || 0}:${c.last_activity || ""}`).join("|");
+  }
+
+  let listTimer = null;
+  async function refreshList() {
+    let fresh;
+    try {
+      Api.invalidateCache("/api/overview/clients");
+      fresh = await Api.get(`/api/overview/clients?archived=${view === "archived"}`, { stale: false });
+    } catch (_) { return; }
+    if (clientsSig(fresh) === clientsSig(clients)) return;   // nothing moved
+    clients = fresh;
     renderList();
   }
 
@@ -67,10 +152,18 @@
 
   function renderList() {
     const q = searchQ.toLowerCase();
-    const list = clients.filter((cl) =>
+    let list = clients.filter((cl) =>
       (chanFilter === "all" || cl.channels.some((ch) => ch.platform === chanFilter)) &&
       (!q || cl.name.toLowerCase().includes(q) || (cl.company || "").toLowerCase().includes(q))
     );
+    
+    // Sort by last_activity (most recent first), with nulls at the end
+    list.sort((a, b) => {
+      const aTime = a.last_activity ? new Date(a.last_activity).getTime() : 0;
+      const bTime = b.last_activity ? new Date(b.last_activity).getTime() : 0;
+      return bTime - aTime;  // Most recent first
+    });
+    
     const noun = view === "archived" ? "archived client" : "client";
     document.getElementById("cl-sub").textContent = `${clients.length} ${noun}${clients.length === 1 ? "" : "s"}`;
     const scroll = document.getElementById("cl-scroll");
@@ -110,6 +203,9 @@
       const actions = writable
         ? `<button class="ci2-act" data-act="archive" data-id="${cl.id}" title="Archive chat">${Icon("archive", { size: 14 })}</button>`
         : "";
+      const unreadBadge = cl.unread_count && cl.unread_count > 0 
+        ? `<span class="unread-badge" style="background:var(--neg);color:#fff;border-radius:50%;width:24px;height:24px;display:grid;place-items:center;font-size:11px;font-weight:700;flex-shrink:0">${cl.unread_count > 99 ? '99+' : cl.unread_count}</span>`
+        : "";
       return `<div class="ci2 ${cl.id === active ? "on" : ""}" data-id="${cl.id}">
         <span class="av2" style="background:${avHash(cl.name)}">
           ${initialsOf(cl.name)}
@@ -118,6 +214,7 @@
         <div class="ci2-body">
           <div class="ci2-row1">
             <span class="name">${esc(cl.name)}</span>
+            ${unreadBadge}
           </div>
           <div class="ci2-prev">${esc(cl.company || cl.email || "—")}</div>
           <div class="ci2-foot">
@@ -156,28 +253,8 @@
   let sending = false;          // guards against double-send (Enter + click)
   let threadSig = "";           // signature of the last-rendered message set
 
-  // ── WhatsApp-style download state tracking (localStorage keyed by msgId) ──
-  const DL_PREFIX = "att_dl_";
-  function isDownloaded(msgId) {
-    return !!localStorage.getItem(DL_PREFIX + msgId);
-  }
-  function setDownloaded(msgId) {
-    localStorage.setItem(DL_PREFIX + msgId, "1");
-  }
-  // Temporary upload placeholder IDs (negative numbers so they never clash with DB ids)
-  let _tempIdSeq = -1;
-  function _nextTempId() { return --_tempIdSeq; }
-
-  // ── Friendly file-size label ──
-  function fmtSize(bytes) {
-    if (!bytes) return "";
-    if (bytes < 1024) return bytes + " B";
-    if (bytes < 1048576) return (bytes / 1024).toFixed(0) + " KB";
-    return (bytes / 1048576).toFixed(1) + " MB";
-  }
-
   // ── Presence + typing + read receipts (team-scoped, light polling) ──
-  function markRead(clientId) { Api.post(`/api/clients/${clientId}/read`).catch(() => {}); }
+  function markRead(clientId) { return Api.post(`/api/clients/${clientId}/read`).catch(() => {}); }
 
   function stopPresence() { if (presenceTimer) { clearInterval(presenceTimer); presenceTimer = null; } }
 
@@ -280,32 +357,43 @@
     const cl = clients.find((x) => x.id === active);
     const plat = platOf(cl);
 
-    // Header — the identity block is a button: clicking it opens Contact info,
-    // the way tapping the name does in WhatsApp.
-    const detail = [cl.company, cl.email, cl.phone].filter(Boolean).map(esc).join(" · ");
+    // Header — the avatar opens the quick Contact info panel; clicking the name
+    // opens the client's full profile page. Only the name and channel show here;
+    // company/email/phone live in the contact panel & full profile.
     document.getElementById("th2-head").innerHTML = `
       <button class="th2-id" id="open-contact" title="Contact info">
         <span class="av2" style="background:${avHash(cl.name)};width:38px;height:38px;font-size:13px;border-radius:50%;display:grid;place-items:center;color:#fff;font-weight:700;flex-shrink:0">
           ${initialsOf(cl.name)}
         </span>
         <span class="th2-id-txt">
-          <span class="name">${esc(cl.name)}</span>
+          <span class="name name-link" title="Open full profile">${esc(cl.name)}</span>
           <span class="meta">
             <span class="ch-pill" style="background:${chanColor(plat)}18;color:${chanColor(plat)}">
               <span class="cd" style="background:${chanColor(plat)}"></span>${platformName(plat)}
             </span>
-            ${detail ? `<span class="th2-detail">${detail}</span>` : ""}
             <span class="online-pill" id="online-pill" style="display:none"><span class="odot"></span><span id="online-txt"></span></span>
           </span>
         </span>
       </button>
       <div class="th2-acts">
-        <a class="icon-btn" href="/client?id=${cl.id}&from=conversations" title="Full profile">
+        ${canEditStatus
+          ? `<div class="cd-status th2-status" id="th2-status">${statusControlHTML(cl)}</div>`
+          : `<span class="st ${statusMeta(cl.status).cls}"><span class="sd"></span>${statusMeta(cl.status).label}</span>`}
+        <a class="icon-btn" href="/client?id=${cl.id}&from=conversations" title="Open full profile" aria-label="Open full profile">
           <svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 3.6-7 8-7s8 3 8 7"/></svg>
         </a>
         <button class="icon-btn" id="chat-menu-btn" title="Chat options" aria-haspopup="true">${Icon("dots", { size: 16 })}</button>
       </div>`;
-    document.getElementById("open-contact").onclick = () => openContactPanel(cl.id);
+    document.getElementById("open-contact").onclick = (e) => {
+      // Clicking the name opens the full Client Profile page; the rest of the
+      // identity block (avatar/channel) opens the quick contact panel.
+      if (e.target.closest(".name-link")) {
+        location.href = `/client?id=${cl.id}&from=conversations`;
+        return;
+      }
+      openContactPanel(cl.id);
+    };
+    if (canEditStatus) wireStatusControl(cl);
     document.getElementById("chat-menu-btn").onclick = (e) => { e.stopPropagation(); openChatMenu(e.currentTarget, cl); };
 
     // Composer — archived conversations are read-only, no composer at all.
@@ -372,6 +460,54 @@
           attFileInput.value = "";
         };
 
+        // Drag-and-drop support
+        const composerArea = document.getElementById("composer-area");
+        const threadBody = document.getElementById("th2-body");
+        
+        // Helper function to handle dropped files
+        const handleDroppedFiles = (files) => {
+          const fileArray = Array.from(files).filter(f => f.type); // Filter out non-file items
+          if (fileArray.length) {
+            pendingAttachments.push(...fileArray);
+            renderAttPreviews();
+          }
+        };
+
+        // Add drag-over and drop listeners to composer area
+        const dragoverHandler = (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          if (composerArea) composerArea.style.backgroundColor = "var(--brand-soft)";
+        };
+
+        const dragleaveHandler = (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          if (composerArea) composerArea.style.backgroundColor = "";
+        };
+
+        const dropHandler = (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          if (composerArea) composerArea.style.backgroundColor = "";
+          if (e.dataTransfer && e.dataTransfer.files) {
+            handleDroppedFiles(e.dataTransfer.files);
+          }
+        };
+
+        // Attach drag-and-drop listeners to composer and thread areas
+        if (composerArea) {
+          composerArea.addEventListener("dragover", dragoverHandler);
+          composerArea.addEventListener("dragleave", dragleaveHandler);
+          composerArea.addEventListener("drop", dropHandler);
+        }
+
+        if (threadBody) {
+          threadBody.addEventListener("dragover", dragoverHandler);
+          threadBody.addEventListener("dragleave", dragleaveHandler);
+          threadBody.addEventListener("drop", dropHandler);
+        }
+
         setupVoiceInput(textarea, autoGrow);
         signalTyping(cl.id, textarea);
       }
@@ -407,6 +543,11 @@
     if (sig === threadSig) return;                   // nothing new
     threadSig = sig;
     paintMessages(msgs, true);
+    // The thread is open and on-screen, so anything that just arrived is "seen" —
+    // advance the read marker so this chat's badge stays cleared, then refresh the
+    // list so ordering + unread badges update (moves this chat to the top).
+    await markRead(clientId);
+    await refreshList();
   }
 
   function paintMessages(msgs, preserveScroll) {
@@ -454,101 +595,28 @@
           const extLower = (m.attachment_name || "").toLowerCase();
           const isVideo = [".mp4", ".mov", ".m4v", ".webm", ".avi", ".mkv"].some((e) => extLower.endsWith(e));
           const isImage = [".png", ".jpg", ".jpeg", ".gif", ".webp"].some((e) => extLower.endsWith(e));
-          const sizeLbl = fmtSize(m.attachment_size);
-
-          // Has the receiver already downloaded (opened) this attachment?
-          const downloaded = isDownloaded(m.id);
-          // Is this message a temporary upload placeholder (client-side only)?
-          const isUploading = m._uploading === true;
 
           let content, hasAtt = false;
-
-          // ── State 1: uploading (sender-side progress bubble) ──
-          if (isUploading) {
-            hasAtt = true;
-            content = `<div class="att-uploading" id="upl-${m._tempId}">
-              <div class="att-upl-spinner">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/></svg>
-              </div>
-              <div class="upl-info">
-                <div class="upl-name">${esc(m.attachment_name || "Uploading…")}</div>
-                <div class="att-upload-track"><div class="att-upload-fill" style="width:${m._progress || 0}%"></div></div>
-                <div class="att-upload-pct">${m._progress || 0}%</div>
-              </div>
-            </div>`;
-
-          // ── State 2: audio/video — downloaded (rendered inline) ──
-          } else if (m.attachment_type === "audio" && isVideo && (m.mine || downloaded)) {
+          if (m.attachment_type === "audio" && isVideo) {
             hasAtt = true;
             content = `<div class="att-video"><video controls preload="metadata" src="${esc(url)}" style="max-width:100%;width:280px;border-radius:6px;display:block;"></video></div>`;
-
-          // ── State 2b: audio/video — not yet downloaded (receiver badge) ──
-          } else if (m.attachment_type === "audio" && isVideo && !m.mine && !downloaded) {
-            hasAtt = true;
-            content = `<div class="att-dl-badge" data-dl-id="${m.id}" data-dl-url="${esc(url)}" data-dl-type="video" title="Tap to download">
-              <div class="dl-circle">
-                <svg width="22" height="22" fill="none" stroke="white" stroke-width="2" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-              </div>
-              <div class="dl-size-lbl">${sizeLbl || "Video"}</div>
-            </div>`;
-
-          // ── State 2c: audio — downloaded ──
-          } else if (m.attachment_type === "audio" && (m.mine || downloaded)) {
+          } else if (m.attachment_type === "audio") {
             hasAtt = true;
             content = `<div class="att-audio"><audio controls preload="none" src="${esc(url)}"></audio></div>`;
-
-          // ── State 2d: audio — receiver badge ──
-          } else if (m.attachment_type === "audio" && !m.mine && !downloaded) {
-            hasAtt = true;
-            content = `<div class="att-dl-badge" data-dl-id="${m.id}" data-dl-url="${esc(url)}" data-dl-type="audio" title="Tap to download">
-              <div class="dl-circle">
-                <svg width="22" height="22" fill="none" stroke="white" stroke-width="2" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-              </div>
-              <div class="dl-size-lbl">${sizeLbl || "Audio"}</div>
-            </div>`;
-
-          // ── State 3: image — always render inline (small payload) ──
           } else if (m.attachment_type === "file" && isImage) {
             hasAtt = true;
             content = `<div class="att-image"><img class="att-img" data-url="${esc(url)}" src="${esc(url)}" style="max-width:100%;width:280px;max-height:280px;object-fit:cover;border-radius:6px;display:block;cursor:pointer;" /></div>`;
-
-          // ── State 4: file — sender sees a "sent" card with ✓ ──
-          } else if (m.attachment_type === "file" && m.mine) {
-            hasAtt = true;
-            const ext = isExternal ? "LINK" : (m.attachment_name || "file").split(".").pop().toUpperCase().slice(0, 4);
-            content = `<a class="att-sent-card" href="${esc(url)}" target="_blank" rel="noopener">
-              <div class="file-ic">${ext}</div>
-              <div class="file-info">
-                <div class="file-name">${esc(m.attachment_name || "Download")}</div>
-                <div class="file-sub">${sizeLbl || "Sent"}</div>
-              </div>
-              <span class="sent-tick">✓</span>
-            </a>`;
-
-          // ── State 5: file — receiver sees download badge ──
-          } else if (m.attachment_type === "file" && !m.mine && !isExternal && !downloaded) {
-            hasAtt = true;
-            const ext2 = (m.attachment_name || "file").split(".").pop().toUpperCase().slice(0, 4);
-            content = `<div class="att-dl-badge" data-dl-id="${m.id}" data-dl-url="${esc(url)}" data-dl-type="file" data-dl-ext="${esc(ext2)}" data-dl-name="${esc(m.attachment_name || "")}" title="Tap to download">
-              <div class="dl-circle">
-                <svg width="22" height="22" fill="none" stroke="white" stroke-width="2" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-              </div>
-              <div class="dl-size-lbl">${sizeLbl || ext2}</div>
-            </div>`;
-
-          // ── State 6: file — receiver already downloaded (link card) ──
           } else if (m.attachment_type === "file") {
             hasAtt = true;
-            const ext3 = isExternal ? "LINK" : (m.attachment_name || "file").split(".").pop().toUpperCase().slice(0, 4);
+            const ext = isExternal ? "LINK" : (m.attachment_name || "file").split(".").pop().toUpperCase().slice(0, 4);
             content = `<a class="att-file" href="${esc(url)}" target="_blank" rel="noopener">
-              <div class="file-ic">${ext3}</div>
+              <div class="file-ic" style="background:${fileIcColor(ext)}">${ext}</div>
               <div class="file-info">
                 <div class="file-name">${esc(m.attachment_name || "Download")}</div>
                 <div class="file-sub">${isExternal ? "Open link" : "Download"}</div>
               </div>
               <svg class="dl-ic" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
             </a>`;
-
           } else {
             content = esc(m.body);
           }
@@ -590,27 +658,7 @@
         // Delegated image click → WhatsApp-style lightbox (no inline onclick = no XSS).
         body.querySelectorAll(".att-img").forEach((img) =>
           img.addEventListener("click", () => openLightbox(img.dataset.url)));
-        // ── Download badge: click → brief spinner → mark downloaded → re-render ──
-        body.querySelectorAll(".att-dl-badge").forEach((badge) => {
-          badge.addEventListener("click", async () => {
-            const msgId = badge.dataset.dlId;
-            const dlUrl  = badge.dataset.dlUrl;
-            const dlType = badge.dataset.dlType; // file | audio | video
-            if (!msgId || !dlUrl) return;
-
-            // Show spinner inside the circle
-            const circle = badge.querySelector(".dl-circle");
-            if (circle) circle.innerHTML = `<span class="spinner-border spinner-border-sm" style="color:#fff;width:18px;height:18px;"></span>`;
-            badge.style.pointerEvents = "none";
-
-            // Tiny delay (UX feedback), then mark as downloaded and re-render
-            await new Promise((r) => setTimeout(r, 600));
-            setDownloaded(msgId);
-            await renderThread();
-          });
-        });
-      }
-    } catch (e) { toast(e.message); }
+    }
   }
 
   // Open a media URL in a new tab, but confirm it actually loads first. After the
@@ -875,53 +923,12 @@
     pendingAttachments = [];
 
     try {
-      // 1. Send text message first using Optimistic UI updates
+      // Send text first (carrying the quoted-reply target, if any).
       if (text) {
+        await Api.post(`/api/clients/${cl.id}/messages`, { body: text, reply_to_id: replyingTo ? replyingTo.id : null });
         ta.value = "";
         ta.style.height = "auto";
-        const replyTgt = replyingTo;
         clearReply();
-
-        // Create and append an optimistic "sending" bubble immediately
-        const tempId = _nextTempId();
-        const div = document.createElement("div");
-        div.className = "msg2 out grp";
-        div.id = "opt-wrap-" + tempId;
-
-        const quote = replyTgt
-          ? `<div class="reply-quote"><span class="rq-sender">${esc(replyTgt.sender)}</span><span class="rq-text">${esc(replyTgt.snippet)}</span></div>`
-          : "";
-
-        const timeStr = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-        const tick = `<span class="tick" title="Sending..."><svg width="15" height="14" viewBox="0 0 18 14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="opacity: 0.5;"><path d="M2 7.5l4 4L15 3"/></svg></span>`;
-
-        div.innerHTML = `<span class="msg-check"></span>
-          <div class="bubble2" style="opacity: 0.65;">
-            ${quote}
-            ${esc(text)}
-            <span class="wa-time">${timeStr}${tick}</span>
-          </div>`;
-
-        const body = document.getElementById("th2-body");
-        if (body) {
-          if (body.querySelector(".conv-empty-state")) body.innerHTML = "";
-          body.appendChild(div);
-          body.scrollTop = body.scrollHeight;
-        }
-
-        // Fire request in the background
-        Api.post(`/api/clients/${cl.id}/messages`, { body: text, reply_to_id: replyTgt ? replyTgt.id : null })
-          .then(async () => {
-            await renderThread();
-            const opt = document.getElementById("opt-wrap-" + tempId);
-            if (opt) opt.remove();
-          })
-          .catch((e) => {
-            toast("Failed to send message: " + e.message);
-            ta.value = text;
-            const opt = document.getElementById("opt-wrap-" + tempId);
-            if (opt) opt.remove();
-          });
       }
       renderAttPreviews();   // clear the composer preview strip
 
@@ -938,6 +945,13 @@
         }
       }
       await renderThread();   // repaint from the server (replaces the bubbles)
+      // Reload clients to update last_activity and unread_count (moves chat to top)
+      await load();
+      // Re-select the active client to keep it highlighted
+      if (active) {
+        const activeEl = document.querySelector(`#cl-scroll .ci2[data-id="${active}"]`);
+        if (activeEl) activeEl.classList.add("on");
+      }
     } catch (e) {
       toast(e.message);
     } finally {
@@ -1000,9 +1014,12 @@
     menu.className = "msg-menu chat-menu"; menu.id = "chat-menu";
     menu.innerHTML =
       `<button data-a="contact">${Icon("users", { size: 14 })} Contact info</button>` +
+      // Clear chat is destructive and Super-Admin-only; Archive stays available to any writable role.
+      (canClearAll && view !== "archived"
+        ? `<button data-a="clear" class="danger">${Icon("eraser", { size: 14 })} Clear chat</button>`
+        : "") +
       (writable && view !== "archived"
-        ? `<button data-a="clear" class="danger">${Icon("eraser", { size: 14 })} Clear chat</button>` +
-          `<button data-a="archive">${Icon("archive", { size: 14 })} Archive chat</button>`
+        ? `<button data-a="archive">${Icon("archive", { size: 14 })} Archive chat</button>`
         : "") +
       (canClearAll
         ? `<div class="menu-sep"></div><button data-a="clearall" class="danger">${Icon("alert", { size: 14 })} Clear all chats</button>`
@@ -1137,8 +1154,9 @@
         </div>
         <div class="cp-block cp-actions">
           <a class="cp-act" href="/client?id=${cl.id}&from=conversations">${Icon("users", { size: 15 })} Open full profile</a>
+          ${canClearAll && view !== "archived" ? `
+            <button class="cp-act danger" id="cp-clear">${Icon("eraser", { size: 15 })} Clear chat</button>` : ""}
           ${writable && view !== "archived" ? `
-            <button class="cp-act danger" id="cp-clear">${Icon("eraser", { size: 15 })} Clear chat</button>
             <button class="cp-act" id="cp-archive">${Icon("archive", { size: 15 })} Archive chat</button>` : ""}
         </div>
       </div>`;
@@ -1222,7 +1240,9 @@
   }
 
   // ─── Right panel: AI ───
-  let aiPanelOpen = true;
+  // Collapsed by default — the analysis is opt-in, opened via the "AI" tab.
+  let aiPanelOpen = false;
+  let aiRenderedFor = null;   // client id the AI panel currently reflects
 
   function setAiPanelOpen(open) {
     aiPanelOpen = open;
@@ -1232,6 +1252,8 @@
       panel.classList.remove("collapsed");
       panel.style.width = "";
       toggleBtn.classList.remove("show");
+      // Lazily fetch the analysis the first time it's opened for this client.
+      if (active && aiRenderedFor !== active) renderAI();
     } else {
       panel.classList.add("collapsed");
       toggleBtn.classList.add("show");
@@ -1240,9 +1262,11 @@
 
   document.getElementById("ai-close-btn").addEventListener("click", () => setAiPanelOpen(false));
   document.getElementById("ai-toggle-btn").addEventListener("click", () => setAiPanelOpen(true));
+  setAiPanelOpen(false);   // start collapsed with the "AI" tab showing
 
   async function renderAI() {
     const cl = clients.find((x) => x.id === active);
+    aiRenderedFor = active;   // this panel now reflects the active client
     const scroll = document.getElementById("ai-scroll");
     const modelSub = document.getElementById("ai-model-sub");
     scroll.innerHTML = `<div style="padding:20px 0;text-align:center;color:var(--muted);font-size:12.5px">Loading...</div>`;
@@ -1322,9 +1346,18 @@
     document.getElementById("empty-center").style.display = "none";
     document.getElementById("thread-wrap").style.display = "flex";
     renderThread();
-    renderAI();
+    // Only fetch the AI analysis when the panel is actually open; otherwise defer
+    // it until the user expands the "AI" tab (aiRenderedFor stays out of sync so
+    // setAiPanelOpen(true) triggers the fetch).
+    if (aiPanelOpen) renderAI(); else aiRenderedFor = null;
     // Only active (non-archived) threads get live presence + read receipts.
-    if (view !== "archived") { markRead(id); startPresence(id); }
+    if (view !== "archived") {
+      markRead(id);
+      startPresence(id);
+      // Clear this chat's unread badge immediately rather than waiting for the poll.
+      const c = clients.find((x) => x.id === id);
+      if (c && c.unread_count) { c.unread_count = 0; renderList(); }
+    }
   }
 
   async function archiveClient(id) {
@@ -1335,8 +1368,8 @@
     );
     if (!ok) return;
     try {
-      const convs = await Api.get(`/api/conversations?client_id=${id}`).catch(() => []);
-      for (const cv of convs) await Api.del(`/api/conversations/${cv.id}`);
+      await Api.post(`/api/clients/${id}/archive`);
+      Api.invalidateCache("/api/overview/clients");
       clients = clients.filter((c) => c.id !== id);
       if (active === id) closeThread();
       renderList();
@@ -1347,8 +1380,8 @@
   async function restoreClient(id) {
     const cl = clients.find((c) => c.id === id);
     try {
-      const convs = await Api.get(`/api/conversations?client_id=${id}&is_deleted=true`).catch(() => []);
-      for (const cv of convs) await Api.post(`/api/conversations/${cv.id}/restore`);
+      await Api.post(`/api/clients/${id}/restore`);
+      Api.invalidateCache("/api/overview/clients");
       clients = clients.filter((c) => c.id !== id);  // leaves the archive list
       renderList();
       toast(`${cl ? cl.name + "'s chat" : "Chat"} restored`, "success");
@@ -1358,17 +1391,17 @@
   async function permanentlyDeleteClient(id) {
     const cl = clients.find((c) => c.id === id);
     const ok = await confirmDialog(
-      `This permanently erases ${cl ? cl.name : "this client"}'s archived chat — messages, attachments and analysis. This can't be undone.`,
+      `This permanently erases ${cl ? cl.name : "this client"} — chat, attachments and analysis. This can't be undone.`,
       { title: "Delete permanently?", confirmText: "Delete forever" }
     );
     if (!ok) return;
     try {
-      const convs = await Api.get(`/api/conversations?client_id=${id}&is_deleted=true`).catch(() => []);
-      for (const cv of convs) await Api.del(`/api/conversations/${cv.id}/permanent`);
+      await Api.del(`/api/clients/${id}`);
+      Api.invalidateCache("/api/overview/clients");
       clients = clients.filter((c) => c.id !== id);
       if (active === id) closeThread();
       renderList();
-      toast("Conversation permanently deleted", "success");
+      toast("Client permanently deleted", "success");
     } catch (e) { toast(e.message); }
   }
 
@@ -1467,5 +1500,11 @@
     renderArchiveToggle(); renderFilter(); renderList();
     const first = (preselect && clients.find((c) => c.id === preselect)) ? preselect : (clients[0] && clients[0].id);
     if (first) selectClient(first);
+    // WhatsApp-style live list: poll for new messages / reordering / unread badges
+    // so the list updates without a manual page refresh, even for chats that
+    // aren't currently open. The signature guard keeps it from re-rendering when
+    // nothing has changed. Refresh at once when the tab regains focus.
+    listTimer = setInterval(refreshList, 5000);
+    document.addEventListener("visibilitychange", () => { if (!document.hidden) refreshList(); });
   } catch (e) { toast(e.message); }
 })();

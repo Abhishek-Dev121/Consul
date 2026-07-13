@@ -20,7 +20,9 @@ from app.models.channel import Channel
 from app.models.client import Client
 from app.models.conversation import Conversation
 from app.models.file import FileRecord
+from app.models.message import Message
 from app.models.project import Project, ProjectTask
+from app.models.read_state import ClientRead
 from app.models.user import User, UserRole
 from app.rbac import has_min_role, require_permission
 
@@ -144,7 +146,7 @@ def dashboard_overview(db: Session = Depends(get_db), user: User = Depends(requi
     vol: dict[str, int] = {}
     for c in convos:
         plat = conv_platform.get(c.id)
-        key = plat.value if plat else "other"
+        key = (plat or "other")
         vol[key] = vol.get(key, 0) + 1
 
     # attention: negative first, then most recent
@@ -155,7 +157,7 @@ def dashboard_overview(db: Session = Depends(get_db), user: User = Depends(requi
         attention.append({
             "id": c.id, "client_id": c.client_id, "client": cname.get(c.client_id, "—"),
             "title": c.title or "Untitled",
-            "platform": plat.value if plat else "other",
+            "platform": (plat or "other"),
             "sentiment": s, "time": c.created_at.isoformat() if c.created_at else None,
         })
     # Only surface conversations that actually need attention: negative sentiment
@@ -221,7 +223,7 @@ def dashboard_overview(db: Session = Depends(get_db), user: User = Depends(requi
             "client_id": c.client_id,
             "client": cname.get(c.client_id, "—"),
             "title": c.title or "Untitled",
-            "platform": plat.value if plat else "other",
+            "platform": (plat or "other"),
             "time": c.created_at.isoformat() if c.created_at else None,
         })
 
@@ -254,34 +256,24 @@ def clients_overview(archived: bool = False, db: Session = Depends(get_db), user
     clients = _accessible_clients(db, user)
     cids = [c.id for c in clients] or [-1]
 
-    # Single pass over all conversations for these clients: drives the archived
-    # determination, the per-client chat count, AND the sentiment lookup — instead
-    # of three separate round-trips.
-    conv_rows = db.execute(
-        select(Conversation.id, Conversation.client_id, Conversation.is_deleted)
-        .where(Conversation.client_id.in_(cids))
-    ).all()
-    total_convs: dict[int, int] = {}
-    active_convs: dict[int, int] = {}
-    for _cid, clid, deleted in conv_rows:
-        total_convs[clid] = total_convs.get(clid, 0) + 1
-        if not deleted:
-            active_convs[clid] = active_convs.get(clid, 0) + 1
-
-    def _is_archived(cid_: int) -> bool:
-        return total_convs.get(cid_, 0) > 0 and active_convs.get(cid_, 0) == 0
-
-    clients = [c for c in clients if _is_archived(c.id) == archived]
+    # Archived is a first-class property of the client, so it works even for
+    # clients that have no conversations at all.
+    clients = [c for c in clients if (c.archived_at is not None) == archived]
     cids = set(c.id for c in clients)
 
-    # Chats + conversation→client map for the visible (filtered) set, computed
-    # in Python from the rows we already fetched.
+    # Single pass over the visible clients' conversations: drives the per-client
+    # chat count AND the sentiment lookup in one round-trip.
+    conv_rows = db.execute(
+        select(Conversation.id, Conversation.client_id, Conversation.is_deleted)
+        .where(Conversation.client_id.in_(list(cids) or [-1]))
+    ).all()
     chats: dict[int, int] = {}
     conv_to_client: dict[int, int] = {}
     for conv_id, clid, deleted in conv_rows:
-        if clid in cids and bool(deleted) == archived:
-            chats[clid] = chats.get(clid, 0) + 1
-            conv_to_client[conv_id] = clid
+        if deleted:
+            continue
+        chats[clid] = chats.get(clid, 0) + 1
+        conv_to_client[clid] = conv_id
 
     # calls + projects + docs counts in a single UNION round-trip.
     id_list = list(cids) or [-1]
@@ -303,21 +295,78 @@ def clients_overview(archived: bool = False, db: Session = Depends(get_db), user
 
     sent = _sentiment_by_client(db, conv_to_client)
 
-    out = []
+    # Last activity (for WhatsApp-style ordering) + per-user unread count. Pull the
+    # messages for the visible clients once and derive both in Python — a single
+    # round-trip instead of one COUNT query per client.
+    def _aware(dt):
+        if dt is None:
+            return None
+        return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
+    msg_rows = db.execute(
+        select(
+            Message.client_id, Message.created_by, Message.is_deleted,
+            func.coalesce(Message.sent_at, Message.created_at).label("ts"),
+        ).where(Message.client_id.in_(list(cids) or [-1]))
+    ).all()
+
+    read_rows = db.execute(
+        select(ClientRead.client_id, ClientRead.last_read_at)
+        .where(ClientRead.client_id.in_(list(cids) or [-1]))
+        .where(ClientRead.user_id == user.id)
+    ).all()
+    read_dict = {clid: _aware(ts) for clid, ts in read_rows}
+    cleared = {c.id: _aware(c.chat_cleared_at) for c in clients}
+
+    last_activity: dict[int, datetime] = {}
+    unread_count: dict[int, int] = {}
+    for clid, created_by, is_deleted, ts in msg_rows:
+        ts = _aware(ts)
+        if is_deleted or ts is None:
+            continue
+        # Messages cleared via "Clear chat" don't count as activity or unread.
+        cl_cleared = cleared.get(clid)
+        if cl_cleared and ts <= cl_cleared:
+            continue
+        prev = last_activity.get(clid)
+        if prev is None or ts > prev:
+            last_activity[clid] = ts
+        # Unread = messages from someone else (never your own) newer than the last
+        # time you opened this thread. This is why sending a message never makes it
+        # show up as unread to the sender.
+        if created_by == user.id:
+            continue
+        last_read = read_dict.get(clid)
+        if last_read is None or ts > last_read:
+            unread_count[clid] = unread_count.get(clid, 0) + 1
+
+    rows = []
     for c in clients:
-        out.append({
+        la = last_activity.get(c.id)
+        rows.append((la, {
             "id": c.id, "name": c.name, "company": c.company, "status": c.status,
             "email": c.email, "phone": c.phone,
-            "channels": [{"id": ch.id, "name": ch.name, "platform": ch.platform.value} for ch in c.channels],
+            "channels": [{"id": ch.id, "name": ch.name, "platform": ch.platform} for ch in c.channels],
             "owner": c.assignees[0].name if c.assignees else None,
             "sentiment": _norm_sent(sent.get(c.id)),
             "since": c.created_at.isoformat() if c.created_at else None,
+            "last_activity": la.isoformat() if la else None,
+            "unread_count": unread_count.get(c.id, 0),
             "counts": {
                 "chats": chats.get(c.id, 0), "calls": calls.get(c.id, 0),
                 "projects": projects.get(c.id, 0), "docs": docs.get(c.id, 0),
             },
-        })
-    ttl_cache.set(cache_key, out, ttl=30)
+        }))
+    # Most recent activity first (clients with no messages fall to the bottom,
+    # ordered by name via the stable sort over the name-ordered input).
+    _EPOCH = datetime.min.replace(tzinfo=timezone.utc)
+    rows.sort(key=lambda r: r[0] or _EPOCH, reverse=True)
+    out = [r[1] for r in rows]
+    # Short TTL: this list drives WhatsApp-style live ordering + unread badges, so
+    # it must stay fresh. API-driven sends bust the cache immediately; this bound
+    # keeps inbound messages that arrive via other paths (e.g. Bitrix sync) from
+    # lagging more than a few seconds behind the client's poll.
+    ttl_cache.set(cache_key, out, ttl=5)
     return out
 
 

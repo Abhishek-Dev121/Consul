@@ -73,15 +73,19 @@ def _mk_client_with_log(db, name="Acme"):
 
 def test_clear_chat_removes_messages_and_they_stay_gone():
     db = TestingSessionLocal()
+    root = _mk_user(db, "root@t.com", UserRole.super_admin)
     admin = _mk_user(db, "admin@t.com", UserRole.admin)
     cl = _mk_client_with_log(db)
     api = TestClient(app)
-    h = _auth(admin)
+    h = _auth(root)
 
     # The log backfills into messages on first read.
     before = api.get(f"/api/clients/{cl.id}/messages", headers=h)
     assert before.status_code == 200
     assert len(before.json()) == 3
+
+    # Clearing a single chat is Super-Admin-only — an admin is not enough.
+    assert api.delete(f"/api/clients/{cl.id}/messages", headers=_auth(admin)).status_code == 403
 
     cleared = api.delete(f"/api/clients/{cl.id}/messages", headers=h)
     assert cleared.status_code == 200
@@ -99,10 +103,10 @@ def test_clear_chat_removes_messages_and_they_stay_gone():
 
 def test_new_messages_after_clear_are_visible():
     db = TestingSessionLocal()
-    admin = _mk_user(db, "admin@t.com", UserRole.admin)
+    root = _mk_user(db, "root@t.com", UserRole.super_admin)
     cl = _mk_client_with_log(db)
     api = TestClient(app)
-    h = _auth(admin)
+    h = _auth(root)
 
     api.get(f"/api/clients/{cl.id}/messages", headers=h)
     api.delete(f"/api/clients/{cl.id}/messages", headers=h)

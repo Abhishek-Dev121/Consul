@@ -3,10 +3,24 @@
     <button class="btn btn-soft" id="new-channel" data-bs-toggle="modal" data-bs-target="#channelModal">${Icon("plus", { size: 14 })} Channel</button>
     <button class="btn btn-primary" id="new-client" data-bs-toggle="modal" data-bs-target="#clientModal">${Icon("plus", { size: 14 })} Client</button>
   </div>`;
+  await renderLayout("/channels", "Channel Management", { crumb: "Workspace", hideSearch: true, actions });
+  const admin = isAdmin();
+  if (!admin) { const b = document.getElementById("new-channel"); if (b) b.remove(); }
+  if (!canWrite()) { const b = document.getElementById("new-client"); if (b) b.remove(); }
 
-  const PLATFORMS = ["whatsapp", "upwork", "slack", "email", "telegram", "linkedin", "other"];
+  const BUILTINS = ["whatsapp", "upwork", "slack", "email", "telegram", "linkedin"];
   let channels = [], allClients = [], users = [];
-  let typeFilter = "all", userFilter = "", searchTerm = "", admin = false;
+  let typeFilter = "all", userFilter = "", searchTerm = "";
+  let newPlatformLogo = "";   // data-URL of the logo picked for a "Create New" platform
+
+  // Distinct platform keys actually present, plus the built-ins and any custom
+  // types — so filters and the dropdown stay in sync as platforms are added.
+  function knownPlatforms() {
+    const seen = new Set(BUILTINS);
+    Object.keys(CUSTOM_PLATFORMS).forEach((k) => seen.add(k));
+    channels.forEach((c) => seen.add(c.platform));   // includes legacy "other"
+    return [...seen];
+  }
 
   function contactsFor(id) { return allClients.filter((c) => c.channels.some((ch) => ch.id === id)); }
 
@@ -26,7 +40,7 @@
 
   // ---- Filters ----
   function renderFilters() {
-    const types = ["all", ...PLATFORMS];
+    const types = ["all", ...knownPlatforms()];
     const tf = document.getElementById("type-filter");
     tf.innerHTML = types.map((t) =>
       `<button type="button" class="pill ${t === typeFilter ? "active" : ""}" data-t="${t}">${t === "all" ? "All" : platformName(t)}</button>`).join("");
@@ -133,14 +147,84 @@
   }
 
   // ---- Create channel ----
+  const CREATE_NEW = "__new__";
+
+  // Build the platform dropdown: built-ins, then any custom types, then a
+  // "Create New…" option (replacing the old "Other").
+  function populatePlatformSelect() {
+    const sel = document.getElementById("ch-platform");
+    const customKeys = Object.keys(CUSTOM_PLATFORMS);
+    let html = BUILTINS.map((p) => `<option value="${p}">${esc(platformName(p))}</option>`).join("");
+    if (customKeys.length) {
+      html += `<optgroup label="Custom">` +
+        customKeys.map((k) => `<option value="${k}">${esc(CUSTOM_PLATFORMS[k].name)}</option>`).join("") +
+        `</optgroup>`;
+    }
+    html += `<option value="${CREATE_NEW}">+ Create New…</option>`;
+    sel.innerHTML = html;
+    toggleNewPlatformPanel();
+  }
+
+  function toggleNewPlatformPanel() {
+    const isNew = document.getElementById("ch-platform").value === CREATE_NEW;
+    document.getElementById("new-platform-panel").hidden = !isNew;
+  }
+
+  function resetNewPlatform() {
+    newPlatformLogo = "";
+    document.getElementById("np-name").value = "";
+    document.getElementById("np-logo-input").value = "";
+    const prev = document.getElementById("np-logo-preview");
+    prev.style.backgroundImage = ""; prev.classList.add("empty");
+  }
+
+  document.getElementById("ch-platform").addEventListener("change", toggleNewPlatformPanel);
+
+  // Logo picker → validate + read as a data URL for inline preview and upload.
+  document.getElementById("np-logo-btn").addEventListener("click", () => document.getElementById("np-logo-input").click());
+  document.getElementById("np-logo-input").addEventListener("change", (e) => {
+    const file = e.target.files && e.target.files[0];
+    if (!file) return;
+    if (!file.type.startsWith("image/")) { toast("Please choose an image file"); e.target.value = ""; return; }
+    if (file.size > 250 * 1024) { toast("Logo is too large — please use an image under 250 KB"); e.target.value = ""; return; }
+    const reader = new FileReader();
+    reader.onload = () => {
+      newPlatformLogo = reader.result;
+      const prev = document.getElementById("np-logo-preview");
+      prev.style.backgroundImage = `url("${newPlatformLogo}")`; prev.classList.remove("empty");
+    };
+    reader.onerror = () => toast("Could not read that image");
+    reader.readAsDataURL(file);
+  });
+
+  // Reset the "Create New" state whenever the modal closes.
+  document.getElementById("channelModal").addEventListener("hidden.bs.modal", () => {
+    document.getElementById("ch-name").value = "";
+    const sel = document.getElementById("ch-platform");
+    if (sel.value === CREATE_NEW) sel.value = BUILTINS[0];
+    resetNewPlatform();
+    toggleNewPlatformPanel();
+  });
+
   document.getElementById("save-channel").addEventListener("click", async () => {
     const name = document.getElementById("ch-name").value.trim();
     if (!name) return toast("Channel name required");
+    let platform = document.getElementById("ch-platform").value;
+
     try {
-      await Api.post("/api/channels", { name, platform: document.getElementById("ch-platform").value, config: {} });
-      document.getElementById("ch-name").value = "";
+      // Creating a brand-new platform type first (name + required logo), then the
+      // channel that uses it.
+      if (platform === CREATE_NEW) {
+        const pName = document.getElementById("np-name").value.trim();
+        if (!pName) return toast("Platform name required");
+        if (!newPlatformLogo) return toast("Please upload a logo for the new platform");
+        const created = await Api.post("/api/channels/platform-types", { name: pName, logo: newPlatformLogo });
+        CUSTOM_PLATFORMS[created.key] = { name: created.name, logo: created.logo };
+        platform = created.key;
+      }
+      await Api.post("/api/channels", { name, platform, config: {} });
       bootstrap.Modal.getOrCreateInstance(document.getElementById("channelModal")).hide();
-      await loadData(); refreshClientChannelOptions(); renderGrid();
+      await loadData(); populatePlatformSelect(); refreshClientChannelOptions(); renderFilters(); renderGrid();
       toast("Channel created", "success");
     } catch (e) { toast(e.message); }
   });
@@ -173,24 +257,12 @@
     } catch (e) { toast(e.message); }
   });
 
+  // ---- Init ----
   // A failure here used to leave the page on its skeletons forever. Show what
   // went wrong instead.
   try {
-    const layoutPromise = renderLayout("/channels", "Channel Management", { crumb: "Workspace", hideSearch: true, actions });
-    const dataPromise = loadData();
-
-    await Promise.all([layoutPromise, dataPromise]);
-
-    admin = isAdmin();
-    if (!admin) {
-      const b = document.getElementById("new-channel");
-      if (b) b.remove();
-    }
-    if (!canWrite()) {
-      const b = document.getElementById("new-client");
-      if (b) b.remove();
-    }
-
+    await loadData();
+    populatePlatformSelect();
     renderFilters();
     refreshClientChannelOptions();
     renderGrid();

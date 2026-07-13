@@ -82,7 +82,7 @@
   // ── Document card ──────────────────────────────────────────────────────
   function docCard(d) {
     const ty = typeOf(d.filename, d.content_type, d.storage_key);
-    const href = d.content_type === "url" ? d.storage_key : `/api/files/${d.id}/download`;
+    const isUrl = d.content_type === "url";
 
     let aiButton = "", analysisBox = "";
     if (d.analysis) {
@@ -112,7 +112,9 @@
       <div class="dc-top">
         <span class="doc-ic" style="background:${ty.c}">${ty.t}</span>
         <div class="dc-body">
-          <a class="dc-name" href="${esc(href)}" target="_blank" rel="noopener" title="${esc(d.filename)}">${esc(d.filename)}</a>
+          ${isUrl
+            ? `<a class="dc-name" href="${esc(d.storage_key)}" target="_blank" rel="noopener" title="${esc(d.filename)}">${esc(d.filename)}</a>`
+            : `<a class="dc-name" href="#" data-open="${d.id}" data-fn="${esc(d.filename)}" title="${esc(d.filename)}">${esc(d.filename)}</a>`}
           <div class="dc-meta">${ty.cat}${d.content_type === "url" ? "" : ` · ${size(d.size)}`}</div>
           <div class="dc-sub">
             ${esc(d.client)}
@@ -120,7 +122,10 @@
           </div>
           <div class="dc-foot">${esc(d.by)} · ${d.created_at ? fmtDate(d.created_at) : ""}</div>
         </div>
-        <div class="dc-actions">${aiButton}</div>
+        <div class="dc-actions">
+          <button class="btn btn-soft btn-sm" onclick="goToClientDocuments(${d.client_id})" title="Open in conversation" aria-label="Open ${esc(d.client)}'s conversation">${Icon('send', { size: 13 })}</button>
+          ${aiButton}
+        </div>
       </div>
       ${analysisBox}
     </div>`;
@@ -266,6 +271,15 @@
     root.querySelectorAll("[data-run]").forEach((el) =>
       el.addEventListener("click", () => runDocumentAI(parseInt(el.dataset.run, 10), el)));
 
+    // Uploaded files download through an authenticated fetch (a plain link can't
+    // carry the bearer token, so the endpoint would reject it).
+    root.querySelectorAll("a.dc-name[data-open]").forEach((el) =>
+      el.addEventListener("click", async (e) => {
+        e.preventDefault();
+        try { await Api.openFile(`/api/files/${el.dataset.open}/download`, { filename: el.dataset.fn }); }
+        catch (err) { toast(err.message); }
+      }));
+
     const prev = root.querySelector("#docs-prev");
     const next = root.querySelector("#docs-next");
     if (prev) prev.addEventListener("click", () => { page--; render(); });
@@ -294,6 +308,12 @@
       btn.innerHTML = original;
     }
   }
+
+  window.goToClientDocuments = (clientId) => {
+    // Match the Call Recordings "location" button: jump to this client's thread on
+    // the Conversations page, where the document lives.
+    window.location.href = `/conversations?client=${clientId}`;
+  };
 
   try { docs = await Api.get("/api/overview/documents"); render(); } catch (e) { toast(e.message); }
 })();

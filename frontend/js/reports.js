@@ -55,14 +55,6 @@
           <h2>Reports & Analytics</h2>
           <p class="mb-0 text-muted" style="font-size:13px">Weekly communication volume, sentiment trends, team productivity and client engagement.</p>
         </div>
-        <div class="dropdown no-print">
-          <button class="btn btn-primary btn-sm dropdown-toggle" data-bs-toggle="dropdown">${Icon("download", { size: 14 })} Export Report</button>
-          <ul class="dropdown-menu dropdown-menu-end">
-            <li><button class="dropdown-item" id="export-csv-btn">Export CSV</button></li>
-            <li><button class="dropdown-item" id="export-excel-btn">Export Excel</button></li>
-            <li><button class="dropdown-item" id="export-pdf-btn">Export PDF (Print)</button></li>
-          </ul>
-        </div>
       </div>
 
       <div class="grid g-4" style="margin-bottom:16px">
@@ -109,8 +101,13 @@
           : '<tr><td colspan="5"><div class="empty muted">No engagement data yet.</div></td></tr>'}
         </tbody></table></div>`;
 
-    document.getElementById("export-csv-btn").onclick = () => exportReport("csv", d);
-    document.getElementById("export-excel-btn").onclick = () => exportReport("excel", d);
-    document.getElementById("export-pdf-btn").onclick = () => window.print();
+    // Export Report button is currently hidden; guard the handlers so the page
+    // still renders if the markup is absent.
+    const csvBtn = document.getElementById("export-csv-btn");
+    if (csvBtn) csvBtn.onclick = () => exportReport("csv", d);
+    const xlsBtn = document.getElementById("export-excel-btn");
+    if (xlsBtn) xlsBtn.onclick = () => exportReport("excel", d);
+    const pdfBtn = document.getElementById("export-pdf-btn");
+    if (pdfBtn) pdfBtn.onclick = () => window.print();
   } catch (e) { toast(e.message); }
 })();

@@ -15,3 +15,7 @@ storage/
 test.db
 test_clear.db
 backend/test*.db
+
+# database dumps must not be committed
+*.dump
+cca_backup.dump

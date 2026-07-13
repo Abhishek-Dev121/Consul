@@ -50,8 +50,8 @@ def _mk_user(db, email, role):
 def test_permission_seeding():
     db = TestingSessionLocal()
     perms = db.query(Permission).all()
-    # There should be exactly 30 permissions defined
-    assert len(perms) == 30
+    # There should be exactly 31 permissions defined (added integrations.manage)
+    assert len(perms) == 31
     
     # Verify dashboard.view exists
     dash = db.query(Permission).filter(Permission.code == "dashboard.view").first()

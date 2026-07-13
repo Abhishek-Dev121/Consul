@@ -24,6 +24,7 @@ _PAGES = {
     "/activity": "activity.html",
     "/users": "users.html",
     "/bitrix": "bitrix.html",
+    "/integrations": "integrations.html",
     "/accept-invite": "invite.html",
     "/forgot-password": "forgot_password.html",
     "/reset-password": "reset_password.html",
