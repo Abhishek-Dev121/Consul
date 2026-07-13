@@ -7,6 +7,12 @@ from sqlalchemy.orm import DeclarativeBase, sessionmaker
 
 from app.config import settings
 
+if not settings.database_url:
+    raise RuntimeError(
+        "DATABASE_URL is not set. Add it to your environment or backend/.env "
+        "(see .env.example). It is intentionally not hard-coded in the source."
+    )
+
 # Postgres gets real JSONB; SQLite (tests) falls back to plain JSON, which it can
 # actually render. Without the variant, create_all() blows up under SQLite.
 JSONColumn = JSONB().with_variant(JSON(), "sqlite")

@@ -53,34 +53,46 @@ def list_projects(
         groups = bitrix_service.fetch_project_groups(db)
     except Exception:
         groups = []
-        
+
+    # Resolve OWNER_ID -> real person. Previously every unsynced group rendered a
+    # fabricated "Owner (ID 8)", which also produced nonsense avatar initials.
+    directory = bitrix_service.fetch_users(db) if groups else {}
+
     combined = []
     for g in groups:
         gid = str(g["ID"])
         if gid in local_map:
             combined.append(local_map[gid])
         else:
+            owner_id = str(g.get("OWNER_ID") or "")
+            profile = directory.get(owner_id)
+            members = []
+            if owner_id:
+                members.append({
+                    "id": 0,
+                    "bitrix_user_id": owner_id,
+                    # Fall back to the id only when the directory really has no entry.
+                    "name": profile["name"] if profile else f"User {owner_id}",
+                    "work_position": (profile or {}).get("position") or "Project Owner",
+                    "icon_url": (profile or {}).get("photo"),
+                    "role": "owner",
+                })
             combined.append({
                 "id": 0,
                 "client_id": None,
                 "bitrix_project_id": gid,
                 "title": g["NAME"],
                 "status": "closed" if g.get("CLOSED") == "Y" else "active",
-                "responsible": str(g.get("OWNER_ID") or ""),
+                "responsible": owner_id,
                 "due_date": None,
                 "deliverables": g.get("DESCRIPTION") or None,
                 "synced_at": None,
+                # This group has never been synced, so its tasks were never fetched.
+                # `tasks: []` is indistinguishable from "genuinely has no tasks", so
+                # the UI needs this flag to avoid rendering a misleading "0 / 0".
+                "synced": False,
                 "tasks": [],
-                "members": [
-                    {
-                        "id": 0,
-                        "bitrix_user_id": str(g.get("OWNER_ID") or ""),
-                        "name": "Owner (ID " + str(g.get("OWNER_ID")) + ")",
-                        "work_position": "Project Owner",
-                        "icon_url": None,
-                        "role": "owner"
-                    }
-                  ]
+                "members": members,
             })
             
     # Include local projects not returned by the groups call

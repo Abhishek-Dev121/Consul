@@ -25,8 +25,15 @@ class Settings(BaseSettings):
     environment: Literal["development", "production"] = "development"
     secret_key: str = "change-me-in-production"
     access_token_expire_minutes: int = 60 * 12
+    # "Keep me signed in" issues a longer-lived token. Without this the checkbox
+    # only chose where the token was stored, so a remembered session still died
+    # after 12 hours.
+    remember_me_expire_days: int = 30
 
-    database_url: str = "postgresql+psycopg2://neondb_owner:npg_xL3dj5gmAnsI@ep-super-heart-at950jsl.c-9.us-east-1.aws.neon.tech/neondb?sslmode=require"
+    # No default: the connection string (with credentials) must come from the
+    # environment / .env, never be hard-coded here. Empty -> fail fast at startup
+    # (see app/database.py) instead of silently using a baked-in database.
+    database_url: str = ""
     redis_url: str = "redis://localhost:6379/0"
     # Seconds between DB keep-alive pings (prevents serverless-Postgres cold starts).
     # Set to 0 to disable (e.g. to conserve Neon free-tier compute hours).

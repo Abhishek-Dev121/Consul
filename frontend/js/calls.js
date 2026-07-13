@@ -61,9 +61,11 @@
     const lab = (t) => `<div class="rec-lab">${t}</div>`;
     return items.length ? items.map((c) => {
       const a = c.analysis;
+      const ups = (a && a.follow_ups || []).map((p) => `<li>${esc(p)}</li>`).join("");
       const body = a ? `<div class="card-pad rec-ai">
           <div>${lab(`${Icon('sparkles', { size: 12 })} AI summary`)}<p style="font-size:12.5px;line-height:1.55">${esc(a.summary || "—")}</p>
-            ${a.behavioral_assessment ? `<p style="font-size:11.5px;color:var(--muted);margin-top:8px"><b>Behavior:</b> ${esc(a.behavioral_assessment)}</p>` : ""}</div>
+            ${a.behavioral_assessment ? `<p style="font-size:11.5px;color:var(--muted);margin-top:8px"><b>Behavior:</b> ${esc(a.behavioral_assessment)}</p>` : ""}
+            ${ups ? `<div style="margin-top:12px">${lab("Follow-ups &amp; open questions")}<ul class="ai-list">${ups}</ul></div>` : ""}</div>
           <div>${lab("Key points")}<ul class="ai-list">${(a.key_points || []).map((p) => `<li>${esc(p)}</li>`).join("") || '<li class="muted">—</li>'}</ul></div>
           <div>${lab("Action items")}<ul class="ai-list todo">${(a.pending_actions || []).map((p) => `<li>${esc(p)}</li>`).join("") || '<li class="muted">—</li>'}</ul></div>
         </div>`

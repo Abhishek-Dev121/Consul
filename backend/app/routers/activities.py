@@ -20,10 +20,23 @@ def list_activities(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    stmt = select(Activity).order_by(Activity.created_at.desc()).limit(min(limit, 200))
+    # Join the actor name in one query so the UI can show "Ravi uploaded…" rather
+    # than a bare id (or "System" for everything).
+    stmt = (
+        select(Activity, User.name.label("actor_name"))
+        .outerjoin(User, Activity.actor_id == User.id)
+        .order_by(Activity.created_at.desc())
+        .limit(min(limit, 200))
+    )
     if client_id:
         ensure_client_access(user, db.get(Client, client_id))
-        stmt = select(Activity).where(Activity.client_id == client_id).order_by(
-            Activity.created_at.desc()
-        ).limit(min(limit, 200))
-    return db.execute(stmt).scalars().all()
+        stmt = stmt.where(Activity.client_id == client_id)
+
+    out = []
+    for act, actor_name in db.execute(stmt).all():
+        out.append({
+            "id": act.id, "client_id": act.client_id, "actor_id": act.actor_id,
+            "actor_name": actor_name, "action": act.action,
+            "detail": act.detail or {}, "created_at": act.created_at,
+        })
+    return out

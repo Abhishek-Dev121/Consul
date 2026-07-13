@@ -18,3 +18,6 @@ class FileRecord(Base):
     size: Mapped[int | None] = mapped_column(BigInteger)
     uploaded_by: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    # Soft-delete (archive). NULL = active; set = in the Archive, hidden from the
+    # normal file/media views until restored or permanently deleted.
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

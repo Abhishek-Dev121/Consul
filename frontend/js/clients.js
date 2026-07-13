@@ -120,7 +120,7 @@
         </div></div>
         <div class="d-flex gap-2 mt-2">
           <a class="btn btn-primary flex-fill" href="/chat?id=${c.id}">${Icon("message", { size: 14 })} Conversations</a>
-          <a class="btn btn-soft flex-fill" href="/client?id=${c.id}">${Icon("users", { size: 14 })} View profile</a>
+          <a class="btn btn-soft flex-fill" href="/client?id=${c.id}&from=clients">${Icon("users", { size: 14 })} View profile</a>
         </div>
         <div class="d-flex gap-2 mt-2">
           ${canWrite() ? `<button class="btn btn-light flex-fill" id="dr-edit">${Icon("edit", { size: 14 })} Edit client</button>` : ""}

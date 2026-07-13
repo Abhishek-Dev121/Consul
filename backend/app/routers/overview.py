@@ -430,7 +430,7 @@ def documents_overview(db: Session = Depends(get_db), user: User = Depends(get_c
         select(FileRecord, User.name.label("by"), Project.title.label("proj"))
         .outerjoin(User, FileRecord.uploaded_by == User.id)
         .outerjoin(Project, FileRecord.project_id == Project.id)
-        .where(FileRecord.client_id.in_(cids))
+        .where(FileRecord.client_id.in_(cids), FileRecord.archived_at.is_(None))
         .order_by(FileRecord.created_at.desc())
     ).all()
 
@@ -476,7 +476,7 @@ def calls_overview(db: Session = Depends(get_db), user: User = Depends(get_curre
         select(AudioRecording, User.name.label("by"), Project.title.label("proj"))
         .outerjoin(User, AudioRecording.uploaded_by == User.id)
         .outerjoin(Project, AudioRecording.project_id == Project.id)
-        .where(AudioRecording.client_id.in_(cids))
+        .where(AudioRecording.client_id.in_(cids), AudioRecording.archived_at.is_(None))
         .order_by(AudioRecording.created_at.desc())
     ).all()
     rows = [r[0] for r in rows_j]
@@ -502,6 +502,8 @@ def calls_overview(db: Session = Depends(get_db), user: User = Depends(get_curre
             "created_at": r.created_at.isoformat() if r.created_at else None,
             "analysis": None if not a else {
                 "summary": a.summary, "key_points": a.key_points, "pending_actions": a.pending_actions,
+                # follow_ups also carries the model's open questions — the UI renders it.
+                "follow_ups": a.follow_ups,
                 "sentiment": _norm_sent(a.sentiment), "behavioral_assessment": a.behavioral_assessment,
             },
         })

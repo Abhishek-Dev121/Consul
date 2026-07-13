@@ -9,6 +9,30 @@
   await renderLayout("/clients", "Client profile", { crumb: "Clients", actions });
   const writable = canWrite();
 
+  // The back link returns to wherever the profile was opened from. Callers pass
+  // ?from=conversations|clients; if absent (e.g. an old bookmark), fall back to
+  // the referrer, then default to Clients.
+  (function setBackLink() {
+    const link = document.getElementById("back-link");
+    if (!link) return;
+    let from = (qs("from") || "").toLowerCase();
+    if (!from && document.referrer) {
+      try {
+        const p = new URL(document.referrer, location.origin).pathname;
+        if (p.startsWith("/conversations")) from = "conversations";
+        else if (p.startsWith("/clients")) from = "clients";
+      } catch (_) { /* opaque referrer — ignore */ }
+    }
+    if (from === "conversations") {
+      // Reopen the same client's thread, not just the inbox.
+      link.href = `/conversations?client=${clientId}`;
+      link.textContent = "← Back to conversations";
+    } else {
+      link.href = "/clients";
+      link.textContent = "← Back to clients";
+    }
+  })();
+
   function setTitle(name) {
     const h = document.querySelector("#app-topbar .page-h");
     if (h) h.textContent = name;
@@ -19,23 +43,55 @@
   async function loadClient() {
     client = await Api.get(`/api/clients/${clientId}`);
     setTitle(client.name);
+    renderHero();
     renderInfo();
   }
 
+  function statusPill(s) {
+    const v = (s || "").toLowerCase();
+    if (v === "active") return `<span class="st st-active"><span class="sd"></span>Active</span>`;
+    if (v.includes("hold") || v.includes("pause")) return `<span class="st st-hold"><span class="sd"></span>${esc(s)}</span>`;
+    if (v.includes("archiv") || v.includes("inactive") || v.includes("closed")) return `<span class="st st-done"><span class="sd"></span>${esc(s)}</span>`;
+    return `<span class="st st-active"><span class="sd"></span>${esc(s || "Active")}</span>`;
+  }
+  const chanChips = (list) => (list || []).map((c) =>
+    `<span class="chip">${channelIcon(c.platform, 13)} ${esc(c.name)}</span>`).join("") || `<span class="muted small">None</span>`;
+
+  function renderHero() {
+    const primaryChannel = client.channels && client.channels[0];
+    document.getElementById("cd-hero").innerHTML = `
+      <span class="cd-av" style="background:${avHash(client.name)}">${initialsOf(client.name)}</span>
+      <div class="cd-id">
+        <h2 title="${esc(client.name)}">${esc(client.name)}</h2>
+        <div class="cd-sub">
+          ${statusPill(client.status)}
+          ${client.company ? `<span class="cd-company">${esc(client.company)}</span>` : ""}
+          ${primaryChannel ? `<span class="chip">${channelIcon(primaryChannel.platform, 13)} ${esc(primaryChannel.name)}</span>` : ""}
+        </div>
+        <div class="cd-quick">
+          ${client.email ? `<a href="mailto:${esc(client.email)}">${Icon("mail", { size: 13 })} ${esc(client.email)}</a>` : ""}
+          ${client.phone ? `<span>${Icon("phone", { size: 13 })} ${esc(client.phone)}</span>` : ""}
+          <span>${Icon("users", { size: 13 })} ${(client.assignees || []).length} assignee${(client.assignees || []).length === 1 ? "" : "s"}</span>
+        </div>
+      </div>`;
+  }
+
   function renderInfo() {
+    const assignees = (client.assignees || []).map((a) =>
+      `<span class="chip">${avBox(a.name)} ${esc(a.name)}</span>`).join("") || `<span class="muted small">Unassigned</span>`;
     document.getElementById("info-body").innerHTML = `
-      <div class="row g-3">
-        <div class="col-md-6"><div class="card"><div class="card-header">Contact</div><div class="card-body">
-          <p class="mb-1"><strong>Company:</strong> ${esc(client.company || "—")}</p>
-          <p class="mb-1"><strong>Email:</strong> ${esc(client.email || "—")}</p>
-          <p class="mb-1"><strong>Phone:</strong> ${esc(client.phone || "—")}</p>
-          <p class="mb-1"><strong>Status:</strong> <span class="badge bg-secondary">${esc(client.status)}</span></p>
-          <p class="mb-0"><strong>Notes:</strong> ${esc(client.notes || "—")}</p>
-        </div></div></div>
-        <div class="col-md-6"><div class="card"><div class="card-header">Team & Channels</div><div class="card-body">
-          <p class="mb-1"><strong>Assignees:</strong> ${client.assignees.map((a) => esc(a.name)).join(", ") || "—"}</p>
-          <p class="mb-0"><strong>Channels:</strong> ${client.channels.map((c) => `<span class="badge bg-info text-dark me-1">${esc(c.name)}</span>`).join("") || "—"}</p>
-        </div></div></div>
+      <div class="cd-info-grid">
+        <div class="card"><div class="card-header">Contact details</div><div class="card-body">
+          <div class="cd-kv"><span class="k">Company</span><span class="v ${client.company ? "" : "muted"}">${esc(client.company || "—")}</span></div>
+          <div class="cd-kv"><span class="k">Email</span><span class="v ${client.email ? "" : "muted"}">${client.email ? `<a href="mailto:${esc(client.email)}" style="color:var(--brand);text-decoration:none">${esc(client.email)}</a>` : "—"}</span></div>
+          <div class="cd-kv"><span class="k">Phone</span><span class="v ${client.phone ? "" : "muted"}">${esc(client.phone || "—")}</span></div>
+          <div class="cd-kv"><span class="k">Status</span><span class="v">${statusPill(client.status)}</span></div>
+          <div class="cd-kv"><span class="k">Notes</span><span class="v ${client.notes ? "" : "muted"}">${esc(client.notes || "No notes yet.")}</span></div>
+        </div></div>
+        <div class="card"><div class="card-header">Team &amp; channels</div><div class="card-body">
+          <div class="cd-kv"><span class="k">Assignees</span><span class="v"><span class="cd-chips">${assignees}</span></span></div>
+          <div class="cd-kv"><span class="k">Channels</span><span class="v"><span class="cd-chips">${chanChips(client.channels)}</span></span></div>
+        </div></div>
       </div>`;
   }
 
@@ -43,13 +99,22 @@
   async function loadConversations() {
     const convos = await Api.get(`/api/conversations?client_id=${clientId}`);
     const body = document.getElementById("conv-body");
-    const addBtn = writable
-      ? `<button class="btn btn-sm btn-primary mb-3" onclick="addConversation()">+ Log conversation</button>` : "";
-    if (!convos.length) { body.innerHTML = addBtn + '<p class="muted">No conversations.</p>'; return; }
-    body.innerHTML = addBtn + `<div class="list-group">` + convos.map((c) => `
-      <button class="list-group-item list-group-item-action" onclick="openConversation(${c.id})">
-        <div class="d-flex justify-content-between"><strong>${esc(c.title || "Untitled")}</strong>
-          <span class="small muted">${fmtDate(c.created_at)}</span></div></button>`).join("") + `</div>`;
+    const head = `<div class="cd-sec-head"><h3>Conversations <span class="muted small">(${convos.length})</span></h3>
+      ${writable ? `<button class="btn btn-soft btn-sm" onclick="addConversation()">${Icon("plus", { size: 13 })} Log conversation</button>` : ""}</div>`;
+    if (!convos.length) {
+      body.innerHTML = head + `<div class="empty"><span class="em-ico">${Icon("message", { size: 26 })}</span>No conversations logged yet.</div>`;
+      return;
+    }
+    body.innerHTML = head + `<div class="cd-list">` + convos.map((c) => `
+      <button class="cd-row" onclick="openConversation(${c.id})">
+        <span class="r-ic">${Icon("message", { size: 16 })}</span>
+        <span class="r-body">
+          <span class="r-title">${esc(c.title || "Untitled conversation")}</span>
+          <span class="r-sub">${c.channel_id ? "Channel thread" : "Logged conversation"}</span>
+        </span>
+        <span class="r-time">${c.created_at ? timeAgo(c.created_at) : ""}</span>
+        ${Icon("chevronDown", { size: 15, style: "transform:rotate(-90deg);color:var(--muted-2)" })}
+      </button>`).join("") + `</div>`;
   }
 
   window.openConversation = async (id) => {
@@ -139,91 +204,77 @@
     const projects = await Api.get(`/api/projects?client_id=${clientId}`);
     const body = document.getElementById("proj-body");
     
-    const linkBtn = writable
-      ? `<button class="btn btn-sm btn-primary mb-3" onclick="openLinkProjectModal()">+ Link Bitrix24 Project</button>`
-      : "";
-      
+    const head = `<div class="cd-sec-head"><h3>Linked projects <span class="muted small">(${projects.length})</span></h3>
+      ${writable ? `<button class="btn btn-soft btn-sm" onclick="openLinkProjectModal()">${Icon("plus", { size: 13 })} Link Bitrix24 project</button>` : ""}</div>`;
+
     if (!projects.length) {
-      body.innerHTML = linkBtn + '<p class="muted">No linked projects. Use "Link Bitrix24 Project".</p>';
+      body.innerHTML = head + `<div class="empty"><span class="em-ico">${Icon("folder", { size: 26 })}</span>No projects linked yet.${writable ? ' Use “Link Bitrix24 project” above.' : ""}</div>`;
       return;
     }
-    
-    const cards = projects.map((p) => {
-      const totalTasks = p.tasks.length;
-      const doneStatuses = ["done", "completed", "complete", "closed", "won", "5"];
-      const doneTasks = p.tasks.filter((t) => doneStatuses.includes((t.status || "").toLowerCase())).length;
-      const prog = totalTasks > 0 ? Math.round((doneTasks / totalTasks) * 100) : 0;
-      
-      const membersHtml = p.members.map((m) => {
-        return `<span class="badge bg-light text-dark border me-1 mb-1" title="${esc(m.work_position || 'Member')}">${esc(m.name)} (${esc(m.role)})</span>`;
-      }).join("") || '<span class="muted small">No members synced</span>';
 
-      const tasksRows = p.tasks.map((t) => {
-        const priorityBadge = t.priority === "2" ? `<span class="badge bg-danger">Urgent</span>` : t.priority === "1" ? `<span class="badge bg-warning text-dark">High</span>` : `<span class="badge bg-secondary">Normal</span>`;
-        const estText = t.time_estimate ? `${Math.round(t.time_estimate / 3600)}h` : "—";
+    const doneStatuses = ["done", "completed", "complete", "closed", "won", "5"];
+    const taskPill = (s) => {
+      const v = (s || "").toLowerCase();
+      if (doneStatuses.includes(v)) return `<span class="st st-done"><span class="sd"></span>${esc(s || "Done")}</span>`;
+      if (v.includes("progress")) return `<span class="st st-progress"><span class="sd"></span>${esc(s)}</span>`;
+      return `<span class="st st-active"><span class="sd"></span>${esc(s || "Pending")}</span>`;
+    };
+    const prioChip = (p) => p === "2"
+      ? `<span class="chip bad">Urgent</span>`
+      : p === "1" ? `<span class="chip" style="background:var(--neu-soft);color:var(--neu)">High</span>` : `<span class="chip">Normal</span>`;
+
+    const cards = projects.map((p) => {
+      const total = p.tasks.length;
+      const done = p.tasks.filter((t) => doneStatuses.includes((t.status || "").toLowerCase())).length;
+      const prog = total > 0 ? Math.round((done / total) * 100) : 0;
+
+      const members = p.members.map((m) =>
+        `<span class="chip" title="${esc(m.work_position || "Member")}">${avBox(m.name)} ${esc(m.name)}</span>`
+      ).join("") || `<span class="muted small">No members synced</span>`;
+
+      const rows = p.tasks.map((t) => {
+        const est = t.time_estimate ? `${Math.round(t.time_estimate / 3600)}h` : "—";
         return `<tr>
-          <td>
-            <strong>${esc(t.title)}</strong>
-            ${t.description ? `<div class="text-muted small mt-1" style="max-height: 80px; overflow: auto; white-space: pre-line; font-size:11px;">${esc(t.description)}</div>` : ""}
-          </td>
-          <td>${esc(t.responsible_name || 'Unassigned')}</td>
-          <td><span class="badge bg-light text-dark border">${esc(t.status || 'Pending')}</span></td>
-          <td>${priorityBadge}</td>
-          <td>${estText}</td>
-          <td class="mono small">${t.due_date ? fmtDate(t.due_date).split(",")[0] : '—'}</td>
+          <td><div style="font-weight:600">${esc(t.title)}</div>
+            ${t.description ? `<div class="cd-task-desc">${esc(t.description)}</div>` : ""}</td>
+          <td>${esc(t.responsible_name || "Unassigned")}</td>
+          <td>${taskPill(t.status)}</td>
+          <td>${prioChip(t.priority)}</td>
+          <td class="mono">${est}</td>
+          <td class="mono" style="color:var(--muted)">${t.due_date ? fmtDate(t.due_date).split(",")[0] : "—"}</td>
         </tr>`;
       }).join("");
 
-      const tasksTable = totalTasks > 0
-        ? `<table class="table table-sm mt-3 table-borderless">
-            <thead>
-              <tr class="table-light">
-                <th>Task Details</th>
-                <th>Assignee</th>
-                <th>Status</th>
-                <th>Priority</th>
-                <th>Est</th>
-                <th>Deadline</th>
-              </tr>
-            </thead>
-            <tbody>
-              ${tasksRows}
-            </tbody>
-           </table>`
-        : '<p class="text-muted small mt-3">No tasks in this project group.</p>';
+      const tasksTable = total > 0
+        ? `<table class="cd-task-table"><thead><tr>
+            <th>Task</th><th>Assignee</th><th>Status</th><th>Priority</th><th>Est</th><th>Deadline</th>
+          </tr></thead><tbody>${rows}</tbody></table>`
+        : `<p class="muted small" style="margin:14px 0 0">No tasks in this project group.</p>`;
 
-      return `<div class="card mb-3">
-        <div class="card-header d-flex justify-content-between align-items-center">
-          <div>
-            <h5 class="mb-0 d-inline-block">${esc(p.title)}</h5>
-            <span class="badge bg-info text-dark ms-2">ID: ${esc(p.bitrix_project_id)}</span>
+      return `<div class="cd-proj">
+        <div class="cd-proj-head">
+          <div style="min-width:0">
+            <h4>${esc(p.title)}</h4>
+            <span class="p-id">#${esc(p.bitrix_project_id)}</span>
           </div>
-          <span class="badge bg-secondary">${esc(p.status || "—")}</span>
+          ${statusPill(p.status)}
         </div>
-        <div class="card-body">
-          ${p.description ? `<p class="text-muted mb-3">${esc(p.description)}</p>` : ""}
-          <div class="mb-2"><strong>Team Members:</strong></div>
-          <div class="mb-3 d-flex flex-wrap">${membersHtml}</div>
-          
-          <div class="mb-1 d-flex justify-content-between align-items-center">
-            <strong>Tasks Progress:</strong>
-            <span class="mono small">${doneTasks} / ${totalTasks} (${prog}%)</span>
-          </div>
-          <div class="pbar mb-3" style="height: 8px;">
-            <div style="width: ${prog}%; background: ${prog === 100 ? "var(--pos)" : "var(--brand)"}"></div>
-          </div>
-          
+        <div class="cd-proj-body">
+          ${p.description ? `<p class="muted" style="font-size:13px;margin:0 0 16px">${esc(p.description)}</p>` : ""}
+          <div class="lab">Team members</div>
+          <div class="cd-members cd-chips">${members}</div>
+          <div class="cd-prog-row"><div class="lab" style="margin:0">Task progress</div><span class="n">${done} / ${total} · ${prog}%</span></div>
+          <div class="pbar"><div class="${prog >= 100 ? "done" : ""}" style="width:${prog}%"></div></div>
           ${tasksTable}
-          
-          ${writable ? `<div class="d-flex gap-2 mt-3">
-            <button class="btn btn-sm btn-outline-primary" onclick="syncProject(${p.id})">⟳ Re-sync Group</button>
-            <button class="btn btn-sm btn-outline-danger" onclick="unlinkProject(${p.id})">${Icon("trash", { size: 14 })} Unlink Project</button>
+          ${writable ? `<div class="d-flex gap-2" style="margin-top:16px">
+            <button class="btn btn-soft btn-sm" onclick="syncProject(${p.id})">${Icon("restore", { size: 13 })} Re-sync</button>
+            <button class="btn btn-soft btn-sm text-danger" onclick="unlinkProject(${p.id})">${Icon("trash", { size: 13 })} Unlink</button>
           </div>` : ""}
         </div>
       </div>`;
     }).join("");
-    
-    body.innerHTML = linkBtn + cards;
+
+    body.innerHTML = head + cards;
   }
 
   window.openLinkProjectModal = async () => {
@@ -272,117 +323,115 @@
   }
 
   // ---- Files tab ----
+  let filesArchived = false;   // false = active view, true = Archive view
   async function loadFiles() {
     const [files, projects] = await Promise.all([
-      Api.get(`/api/files?client_id=${clientId}`),
+      // Fresh, not stale-cached — archive/restore must reflect immediately.
+      Api.get(`/api/files?client_id=${clientId}&archived=${filesArchived}`, { stale: false }),
       getClientProjects()
     ]);
     const body = document.getElementById("files-body");
-    
+
+    const head = `<div class="cd-sec-head">
+      <h3>${filesArchived ? "Archived files" : "Files &amp; links"} <span class="muted small">(${files.length})</span></h3>
+      <button class="btn btn-soft btn-sm" onclick="toggleFilesArchive()">
+        ${filesArchived ? Icon("restore", { size: 13 }) + " Back to files" : Icon("archive", { size: 13 }) + " View archive"}
+      </button>
+    </div>`;
+
     let uploader = "";
-    if (writable) {
+    if (writable && !filesArchived) {
       const projOpts = projects.map(p => `<option value="${p.id}">${esc(p.title)}</option>`).join("");
-      const projSelect = projects.length > 1 ? `
-        <select class="form-select form-select-sm mb-2" id="f-project-select">
-          <option value="">Select Project (Optional)</option>
-          ${projOpts}
-        </select>
-      ` : "";
-      uploader = `
-        <div class="row g-2 mb-3" style="max-width:720px">
-          <div class="col-sm-6">
-            <div class="input-group">
-              <input type="file" class="form-control form-control-sm" id="f-upload">
-              <button class="btn btn-primary btn-sm" onclick="uploadFile()">Upload File</button>
-            </div>
-          </div>
-          <div class="col-sm-6">
-            <div class="input-group mb-1">
-              <input type="text" class="form-control form-control-sm" id="f-link-title" placeholder="Link Title (e.g. Google Sheets)">
-              <input type="text" class="form-control form-control-sm" id="f-link-url" placeholder="https://...">
-              <button class="btn btn-primary btn-sm" onclick="addFileLink()">Add Link</button>
-            </div>
-            ${projSelect}
-          </div>
-        </div>
-      `;
+      const projSelect = projects.length > 1
+        ? `<select class="form-select form-select-sm" id="f-project-select" style="width:auto"><option value="">Project (optional)</option>${projOpts}</select>`
+        : "";
+      uploader = `<div class="cd-upload">
+          <input type="file" class="form-control form-control-sm" id="f-upload" style="max-width:240px">
+          <button class="btn btn-primary btn-sm" onclick="uploadFile()">${Icon("upload", { size: 13 })} Upload</button>
+          <span class="tb-divider" style="height:24px"></span>
+          <input type="text" class="form-control form-control-sm" id="f-link-title" placeholder="Link title" style="max-width:170px">
+          <input type="text" class="form-control form-control-sm" id="f-link-url" placeholder="https://…" style="max-width:200px">
+          <button class="btn btn-soft btn-sm" onclick="addFileLink()">${Icon("link", { size: 13 })} Add link</button>
+          ${projSelect}
+        </div>`;
     }
-    
+
+    const iconColor = (ext) => ({ PDF: "#D2473D", DOC: "#2C5AB8", DOCX: "#2C5AB8", XLS: "#1F9D6B", XLSX: "#1F9D6B", CSV: "#1F9D6B", PPT: "#E2574C", PPTX: "#E2574C", PNG: "#7C3AED", JPG: "#7C3AED", JPEG: "#7C3AED", LINK: "#2E6BFF" }[ext] || "#8A94A6");
+
     const rows = files.map((f) => {
       const isLink = f.content_type === "url";
-      const label = isLink ? `${Icon("external", { size: 14 })} Open Link` : `${Icon("download", { size: 14 })} Download`;
       const href = isLink ? f.storage_key : `/api/files/${f.id}/download`;
-      const badgeCls = isLink ? "bg-success-subtle text-success-emphasis" : "bg-light text-dark border";
-      const badgeText = isLink ? "LINK" : (f.content_type || "FILE").toUpperCase().slice(0, 16);
-      const projBadge = f.project_title ? `<span class="badge bg-secondary-subtle text-secondary-emphasis ms-2" style="font-size:10px">${Icon("folder", { size: 12 })} ${esc(f.project_title)}</span>` : "";
+      const ext = isLink ? "LINK" : (f.filename.split(".").pop() || "FILE").toUpperCase().slice(0, 4);
+      const projBadge = f.project_title ? `<span class="chip" style="font-size:10px;padding:2px 7px">${Icon("folder", { size: 10 })} ${esc(f.project_title)}</span>` : "";
 
-      let actionBtns = `<a class="btn btn-sm ${isLink ? "btn-outline-success" : "btn-outline-secondary"} me-1" href="${esc(href)}" target="_blank">${label}</a>`;
-
-      if (f.analysis) {
-        actionBtns += `<button class="btn btn-sm btn-info text-white me-1" type="button" data-bs-toggle="collapse" data-bs-target="#doc-analysis-${f.id}">${Icon("sparkles", { size: 14 })} View AI</button>`;
-      } else if (writable) {
-        actionBtns += `<button class="btn btn-sm btn-success me-1" onclick="analyzeDocument(${f.id}, this)">${Icon("bot", { size: 14 })} Analyze</button>`;
+      let acts = `<a class="btn btn-soft btn-sm" href="${esc(href)}" target="_blank" rel="noopener" title="${isLink ? "Open link" : "Download"}">${Icon(isLink ? "external" : "download", { size: 14 })}</a>`;
+      if (f.analysis) acts += `<button class="btn btn-soft btn-sm" onclick="toggleDocAI(${f.id})" title="View AI analysis">${Icon("sparkles", { size: 14 })}</button>`;
+      if (filesArchived) {
+        // Archive view: Restore + Delete permanently.
+        if (writable) acts += `<button class="btn btn-soft btn-sm" onclick="restoreFile(${f.id})" title="Restore">${Icon("restore", { size: 14 })} Restore</button>`;
+        if (writable) acts += `<button class="btn btn-soft btn-sm text-danger" onclick="deleteFilePermanent(${f.id})" title="Delete permanently">${Icon("trash", { size: 14 })}</button>`;
+      } else {
+        if (!f.analysis && writable) acts += `<button class="btn btn-soft btn-sm" onclick="analyzeDocument(${f.id}, this)">${Icon("bot", { size: 14 })} Analyze</button>`;
+        if (writable) acts += `<button class="btn btn-soft btn-sm" onclick="archiveFile(${f.id})" title="Archive">${Icon("archive", { size: 14 })}</button>`;
       }
 
-      if (writable) {
-        actionBtns += `<button class="btn btn-sm btn-outline-danger" onclick="deleteDocument(${f.id})">${Icon("trash", { size: 14 })}</button>`;
-      }
-
-      let analysisRow = "";
+      let aiPanel = "";
       if (f.analysis) {
         const a = f.analysis;
-        const keyPointsList = (a.key_points || []).map(p => `<li>${esc(p)}</li>`).join("");
-        const actionsList = (a.pending_actions || []).map(p => `<li>${esc(p)}</li>`).join("");
-        const followList = (a.follow_ups || []).map(p => `<li>${esc(p)}</li>`).join("");
-        const sentimentPill = `
-          <span class="badge bg-${a.sentiment === 'positive' ? 'success' : a.sentiment === 'negative' ? 'danger' : 'secondary'}-subtle text-${a.sentiment === 'positive' ? 'success' : a.sentiment === 'negative' ? 'danger' : 'secondary'}-emphasis">
-            ${(a.sentiment || 'neutral').toUpperCase()} (${(a.sentiment_score || 0).toFixed(2)})
-          </span>
-        `;
-        
-        analysisRow = `
-          <tr class="collapse border-0" id="doc-analysis-${f.id}">
-            <td colspan="3" class="bg-light p-3">
-              <div class="card shadow-sm border-0">
-                <div class="card-header bg-white fw-bold d-flex justify-content-between align-items-center">
-                  <span>${Icon("sparkles", { size: 16 })} Document AI Analysis</span>
-                  ${sentimentPill}
-                </div>
-                <div class="card-body">
-                  <div class="mb-3"><strong>Summary:</strong> <p class="mb-0 text-muted" style="font-size:13.5px">${esc(a.summary || "No summary available.")}</p></div>
-                  <div class="row">
-                    <div class="col-md-4">
-                      <strong>Key Points:</strong>
-                      <ul class="text-muted ps-3 mb-0" style="font-size:13px">${keyPointsList || "<li>—</li>"}</ul>
-                    </div>
-                    <div class="col-md-4">
-                      <strong>Pending Actions:</strong>
-                      <ul class="text-muted ps-3 mb-0" style="font-size:13px">${actionsList || "<li>—</li>"}</ul>
-                    </div>
-                    <div class="col-md-4">
-                      <strong>Follow-ups:</strong>
-                      <ul class="text-muted ps-3 mb-0" style="font-size:13px">${followList || "<li>—</li>"}</ul>
-                    </div>
-                  </div>
-                  <div class="mt-2 text-end text-muted small" style="font-size:11px">Model: ${esc(a.model || "gpt-4o-mini")}</div>
-                </div>
-              </div>
-            </td>
-          </tr>
-        `;
+        const list = (arr) => (arr || []).map((p) => `<li>${esc(p)}</li>`).join("") || "<li class='muted'>—</li>";
+        aiPanel = `<div class="cd-file-ai" id="doc-analysis-${f.id}" hidden>
+            <div class="d-flex align-items-center justify-content-between" style="gap:10px">
+              <strong style="font-size:12.5px;display:inline-flex;align-items:center;gap:6px">${Icon("sparkles", { size: 13 })} Document analysis</strong>
+              ${sentPill((a.sentiment || "neu").slice(0, 3))}
+            </div>
+            <p class="muted" style="font-size:12.5px;line-height:1.5;margin:8px 0 0">${esc(a.summary || "No summary available.")}</p>
+            <div class="cd-ai-cols">
+              <div><div class="lab">Key points</div><ul class="ai-list">${list(a.key_points)}</ul></div>
+              <div><div class="lab">Pending actions</div><ul class="ai-list todo">${list(a.pending_actions)}</ul></div>
+              ${(a.follow_ups && a.follow_ups.length) ? `<div><div class="lab">Follow-ups</div><ul class="ai-list">${list(a.follow_ups)}</ul></div>` : ""}
+            </div>
+          </div>`;
       }
 
-      return `<tr>
-        <td><span class="fw-semibold">${esc(f.filename)}</span>${projBadge}</td>
-        <td><span class="badge ${badgeCls}">${esc(badgeText)}</span></td>
-        <td><div class="d-flex align-items-center">${actionBtns}</div></td>
-      </tr>${analysisRow}`;
+      return `<div class="cd-file-row">
+          <span class="cd-file-ic" style="background:${iconColor(ext)}">${ext}</span>
+          <div class="cd-file-body">
+            <div class="cd-file-name" title="${esc(f.filename)}">${esc(f.filename)}</div>
+            <div class="cd-file-sub">${isLink ? "External link" : (f.content_type || "file")}${projBadge ? " · " + projBadge : ""}</div>
+          </div>
+          <div class="cd-file-acts">${acts}</div>
+        </div>${aiPanel}`;
     }).join("");
-    
-    body.innerHTML = uploader + (files.length
-      ? `<table class="table align-middle"><thead><tr><th>Name</th><th>Format</th><th style="width:200px">Action</th></tr></thead><tbody>${rows}</tbody></table>`
-      : '<p class="muted">No files.</p>');
+
+    const empty = filesArchived
+      ? `<div class="empty"><span class="em-ico">${Icon("archive", { size: 26 })}</span>No archived files.</div>`
+      : `<div class="empty"><span class="em-ico">${Icon("file", { size: 26 })}</span>No files or links yet.</div>`;
+    body.innerHTML = head + uploader + (files.length ? rows : empty);
   }
+
+  window.toggleFilesArchive = () => { filesArchived = !filesArchived; loadFiles(); };
+
+  window.archiveFile = async (id) => {
+    try { await Api.post(`/api/files/${id}/archive`); await loadFiles(); toast("Moved to archive", "success"); }
+    catch (e) { toast(e.message); }
+  };
+  window.restoreFile = async (id) => {
+    try { await Api.post(`/api/files/${id}/restore`); await loadFiles(); toast("Restored", "success"); }
+    catch (e) { toast(e.message); }
+  };
+  window.deleteFilePermanent = async (id) => {
+    const ok = await confirmDialog(
+      "This permanently removes the file and its bytes from the server. This cannot be undone.",
+      { title: "Delete permanently?", confirmText: "Delete forever" });
+    if (!ok) return;
+    try { await Api.del(`/api/files/${id}`); await loadFiles(); toast("Permanently deleted", "success"); }
+    catch (e) { toast(e.message); }
+  };
+
+  window.toggleDocAI = (id) => {
+    const box = document.getElementById(`doc-analysis-${id}`);
+    if (box) box.hidden = !box.hidden;
+  };
 
   window.uploadFile = async () => {
     const input = document.getElementById("f-upload");
@@ -454,40 +503,60 @@
   };
 
   // ---- Audio tab ----
+  let audioArchived = false;
   async function loadAudio() {
     const [items, projects] = await Promise.all([
-      Api.get(`/api/audio?client_id=${clientId}`),
+      Api.get(`/api/audio?client_id=${clientId}&archived=${audioArchived}`, { stale: false }),
       getClientProjects()
     ]);
     const body = document.getElementById("audio-body");
-    
+
+    const head = `<div class="cd-sec-head">
+      <h3>${audioArchived ? "Archived recordings" : "Call recordings"} <span class="muted small">(${items.length})</span></h3>
+      <button class="btn btn-soft btn-sm" onclick="toggleAudioArchive()">
+        ${audioArchived ? Icon("restore", { size: 13 }) + " Back to recordings" : Icon("archive", { size: 13 }) + " View archive"}
+      </button>
+    </div>`;
+
     let uploader = "";
-    if (writable) {
+    if (writable && !audioArchived) {
       const projOpts = projects.map(p => `<option value="${p.id}">${esc(p.title)}</option>`).join("");
-      const projSelect = projects.length > 1 ? `
-        <select class="form-select form-select-sm w-auto me-2" id="a-project-select">
-          <option value="">Select Project (Optional)</option>
-          ${projOpts}
-        </select>
-      ` : "";
-      uploader = `<div class="d-flex flex-wrap align-items-center gap-2 mb-3" style="max-width:640px">
-        <input type="file" accept="audio/*,video/*" class="form-control form-control-sm w-auto flex-grow-1" id="audio-input" />
+      const projSelect = projects.length > 1
+        ? `<select class="form-select form-select-sm" id="a-project-select" style="width:auto"><option value="">Project (optional)</option>${projOpts}</select>`
+        : "";
+      uploader = `<div class="cd-upload">
+        <input type="file" accept="audio/*,video/*" class="form-control form-control-sm" id="audio-input" style="max-width:280px" />
         ${projSelect}
-        <button class="btn btn-primary btn-sm" onclick="uploadAudio()">Upload</button></div>`;
+        <button class="btn btn-primary btn-sm" onclick="uploadAudio()">${Icon("upload", { size: 13 })} Upload</button></div>`;
     }
-    
+
     const cards = items.map((a) => {
-      const projBadge = a.project_title ? `<span class="badge bg-secondary-subtle text-secondary-emphasis ms-2" style="font-size:10px">${Icon("folder", { size: 12 })} ${esc(a.project_title)}</span>` : "";
-      return `<div class="card mb-2"><div class="card-body">
-        <div class="d-flex justify-content-between align-items-center">
-          <div><strong>${esc(a.filename)}</strong>${projBadge}</div>
-          ${writable ? `<button class="btn btn-sm btn-success" onclick="analyzeAudio(${a.id})">${Icon("bot", { size: 14 })} Transcribe & analyze</button>` : ""}
+      const projBadge = a.project_title ? `<span class="chip" style="font-size:10px;padding:2px 7px">${Icon("folder", { size: 10 })} ${esc(a.project_title)}</span>` : "";
+      const dur = a.duration ? `${Math.floor(a.duration / 60)}:${String(Math.round(a.duration % 60)).padStart(2, "0")}` : "—";
+      return `<div class="cd-audio">
+        <div class="cd-audio-top">
+          <div class="cd-audio-name">
+            <span class="cd-audio-ic">${Icon("phone", { size: 15 })}</span>
+            <div style="min-width:0">
+              <div class="cd-file-name" title="${esc(a.filename)}">${esc(a.filename)}</div>
+              <div class="cd-file-sub">Duration ${dur} ${projBadge ? "· " + projBadge : ""}</div>
+            </div>
+          </div>
+          <div class="cd-file-acts">
+            ${audioArchived
+              ? (writable ? `<button class="btn btn-soft btn-sm" onclick="restoreAudio(${a.id})">${Icon("restore", { size: 14 })} Restore</button>
+                   <button class="btn btn-soft btn-sm text-danger" onclick="deleteAudioPermanent(${a.id})" title="Delete permanently">${Icon("trash", { size: 14 })}</button>` : "")
+              : (writable ? `<button class="btn btn-soft btn-sm" onclick="analyzeAudio(${a.id})">${Icon("bot", { size: 14 })} Transcribe &amp; analyze</button>
+                   <button class="btn btn-soft btn-sm" onclick="archiveAudio(${a.id})" title="Archive">${Icon("archive", { size: 14 })}</button>` : "")}
+          </div>
         </div>
-        <div class="small muted">Duration: ${a.duration ? a.duration.toFixed(1) + "s" : "—"}</div>
-        <div id="audio-analysis-${a.id}" class="mt-2"></div></div></div>`;
+        <div id="audio-analysis-${a.id}" style="margin-top:10px"></div></div>`;
     }).join("");
-    
-    body.innerHTML = uploader + (items.length ? cards : '<p class="muted">No audio recordings.</p>');
+
+    const empty = audioArchived
+      ? `<div class="empty"><span class="em-ico">${Icon("archive", { size: 26 })}</span>No archived recordings.</div>`
+      : `<div class="empty"><span class="em-ico">${Icon("phone", { size: 26 })}</span>No call recordings yet.</div>`;
+    body.innerHTML = head + uploader + (items.length ? cards : empty);
     // Lazy-load any existing analysis.
     for (const a of items) {
       Api.get(`/api/audio/${a.id}/analysis`).then((an) => {
@@ -496,6 +565,24 @@
       }).catch(() => {});
     }
   }
+
+  window.toggleAudioArchive = () => { audioArchived = !audioArchived; loadAudio(); };
+  window.archiveAudio = async (id) => {
+    try { await Api.post(`/api/audio/${id}/archive`); await loadAudio(); toast("Moved to archive", "success"); }
+    catch (e) { toast(e.message); }
+  };
+  window.restoreAudio = async (id) => {
+    try { await Api.post(`/api/audio/${id}/restore`); await loadAudio(); toast("Restored", "success"); }
+    catch (e) { toast(e.message); }
+  };
+  window.deleteAudioPermanent = async (id) => {
+    const ok = await confirmDialog(
+      "This permanently removes the recording and its file from the server. This cannot be undone.",
+      { title: "Delete permanently?", confirmText: "Delete forever" });
+    if (!ok) return;
+    try { await Api.del(`/api/audio/${id}`); await loadAudio(); toast("Permanently deleted", "success"); }
+    catch (e) { toast(e.message); }
+  };
 
   window.uploadAudio = async () => {
     const input = document.getElementById("audio-input");
@@ -525,11 +612,22 @@
   async function loadActivity() {
     const acts = await Api.get(`/api/activities?client_id=${clientId}`);
     const body = document.getElementById("activity-body");
-    body.innerHTML = acts.length
-      ? `<ul class="list-group">${acts.map((a) => `<li class="list-group-item d-flex justify-content-between">
-          <span><code>${esc(a.action)}</code> <span class="small">${esc(JSON.stringify(a.detail))}</span></span>
-          <span class="small muted">${fmtDate(a.created_at)}</span></li>`).join("")}</ul>`
-      : '<p class="muted">No activity.</p>';
+    const head = `<div class="cd-sec-head"><h3>Activity <span class="muted small">(${acts.length})</span></h3></div>`;
+    if (!acts.length) {
+      body.innerHTML = head + `<div class="empty"><span class="em-ico">${Icon("clock", { size: 26 })}</span>No activity recorded yet.</div>`;
+      return;
+    }
+    // Humanised, icon-coded timeline — replaces the raw action code + JSON dump.
+    body.innerHTML = head + `<div class="cd-activity">${acts.map((a) => {
+      const meta = (typeof activityMeta === "function") ? activityMeta(a.action) : { icon: "clock", tone: "" };
+      const who = a.actor_name || a.actor || "System";
+      const text = (typeof humanizeActivity === "function") ? humanizeActivity(a.action, a.detail) : esc(a.action);
+      return `<div class="cd-act-item">
+        <span class="cd-act-dot ${meta.tone}">${Icon(meta.icon, { size: 13 })}</span>
+        <div class="cd-act-text"><b>${esc(who)}</b> ${esc(text)}</div>
+        <div class="cd-act-time" title="${a.created_at ? esc(new Date(a.created_at).toLocaleString()) : ""}">${a.created_at ? timeAgo(a.created_at) : ""}</div>
+      </div>`;
+    }).join("")}</div>`;
   }
 
   // Topbar actions: Sync Bitrix + Edit contact + View Team
@@ -625,9 +723,15 @@
       el.querySelector(".ml-close").addEventListener("click", close);
       document.addEventListener("keydown", (e) => { if (e.key === "Escape") close(); });
     }
-    el.querySelector(".ml-content").innerHTML = isVideo
+    const content = el.querySelector(".ml-content");
+    content.innerHTML = isVideo
       ? `<video src="${url}" controls autoplay></video>`
       : `<img src="${url}" alt="" />`;
+    const media = content.querySelector(isVideo ? "video" : "img");
+    media.addEventListener("error", () => {
+      el.classList.remove("show"); content.innerHTML = "";
+      toast("This file is no longer available on the server.");
+    }, { once: true });
     el.classList.add("show");
   }
 
@@ -679,8 +783,27 @@
         html += `</div></div>`;
       }
       body.innerHTML = html;
-      body.querySelectorAll(".media-cell[data-img]").forEach((c) => c.addEventListener("click", () => openMediaLightbox(c.dataset.img, false)));
-      body.querySelectorAll(".media-cell[data-vid]").forEach((c) => c.addEventListener("click", () => openMediaLightbox(c.dataset.vid, true)));
+
+      // Some files are DB rows whose bytes are missing on disk (e.g. after a
+      // server/region move) and return 404. Mark those cells as unavailable
+      // instead of showing a silent grey box, and block their click.
+      body.querySelectorAll(".media-cell img, .media-cell video").forEach((el) => {
+        el.addEventListener("error", () => {
+          const cell = el.closest(".media-cell");
+          if (cell && !cell.classList.contains("unavailable")) {
+            cell.classList.add("unavailable");
+            cell.insertAdjacentHTML("beforeend",
+              `<span class="media-missing">${Icon("alert", { size: 16 })}<span>Unavailable</span></span>`);
+          }
+        }, { once: true });
+      });
+
+      const openCell = (c, isVideo) => {
+        if (c.classList.contains("unavailable")) { toast("This file is no longer available on the server."); return; }
+        openMediaLightbox(c.dataset.img || c.dataset.vid, isVideo);
+      };
+      body.querySelectorAll(".media-cell[data-img]").forEach((c) => c.addEventListener("click", () => openCell(c, false)));
+      body.querySelectorAll(".media-cell[data-vid]").forEach((c) => c.addEventListener("click", () => openCell(c, true)));
     } catch (e) {
       body.innerHTML = `<div class="text-danger p-3">Could not load media: ${esc(e.message)}</div>`;
     }

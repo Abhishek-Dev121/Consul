@@ -151,12 +151,46 @@ const Api = {
     return this.request("POST", p, formData, true);
   },
 
+  // Multipart upload with progress. fetch() can't report upload progress, so this
+  // uses XMLHttpRequest. `onProgress(fraction 0..1)` fires as bytes are sent.
+  uploadForm(p, formData, onProgress) {
+    return new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      const url = p.startsWith("http") ? p : BASE_URL + p;
+      xhr.open("POST", url);
+      const token = this.token();
+      if (token) xhr.setRequestHeader("Authorization", `Bearer ${token}`);
+      if (xhr.upload && onProgress) {
+        xhr.upload.onprogress = (e) => { if (e.lengthComputable) onProgress(e.loaded / e.total); };
+      }
+      xhr.onload = () => {
+        if (xhr.status === 401) {
+          Api.clearToken(); _apiCache.clear();
+          if (!location.pathname.endsWith("/login")) location.href = "/login";
+          return reject(new Error("Unauthorized"));
+        }
+        let data = {};
+        try { data = JSON.parse(xhr.responseText || "{}"); } catch { /* non-JSON */ }
+        if (xhr.status >= 200 && xhr.status < 300) return resolve(data);
+        const detail = typeof data.detail === "string" ? data.detail
+          : Array.isArray(data.detail) ? data.detail.map((d) => d.msg).join("; ")
+          : `Upload failed (${xhr.status})`;
+        reject(new Error(detail));
+      };
+      xhr.onerror = () => reject(new Error("Network error during upload"));
+      xhr.send(formData);
+    });
+  },
+
   async login(email, password, remember = true) {
     _progressStart();
     try {
       const form = new URLSearchParams();
       form.set("username", email);
       form.set("password", password);
+      // The server issues a longer-lived token when this is set. Storing it in
+      // localStorage alone is not enough — the JWT would still expire in 12h.
+      form.set("remember", remember ? "true" : "false");
       const res = await fetch(BASE_URL + "/api/auth/login", {
         method: "POST",
         headers: { "Content-Type": "application/x-www-form-urlencoded" },

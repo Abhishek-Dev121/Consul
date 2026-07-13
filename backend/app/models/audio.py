@@ -18,3 +18,5 @@ class AudioRecording(Base):
     duration: Mapped[float | None] = mapped_column(Float)
     uploaded_by: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    # Soft-delete (archive). NULL = active; set = in the Archive.
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

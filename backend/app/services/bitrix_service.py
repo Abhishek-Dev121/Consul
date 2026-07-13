@@ -157,6 +157,48 @@ def fetch_project_groups(db: Session, use_cache: bool = True) -> list[dict]:
     return groups
 
 
+# Directory of Bitrix users, keyed by id. Changes rarely; the projects list needs
+# it only to turn an OWNER_ID into a human name.
+_USERS_CACHE: dict = {"data": None, "at": 0.0}
+_USERS_TTL = 600  # seconds
+
+
+def fetch_users(db: Session, use_cache: bool = True) -> dict[str, dict]:
+    """Map Bitrix user id -> {name, position, photo}.
+
+    Returns {} on any failure: a missing directory should degrade the owner
+    column, never break the projects page.
+    """
+    if use_cache and _USERS_CACHE["data"] is not None and (time.time() - _USERS_CACHE["at"]) < _USERS_TTL:
+        return _USERS_CACHE["data"]
+
+    out: dict[str, dict] = {}
+    start = 0
+    try:
+        while True:
+            res = call_api(db, "user.get", {"start": start})
+            batch = res.get("result") or []
+            for u in batch:
+                uid = str(u.get("ID") or "").strip()
+                if not uid:
+                    continue
+                name = " ".join(p for p in (u.get("NAME"), u.get("LAST_NAME")) if p).strip()
+                out[uid] = {
+                    "name": name or (u.get("EMAIL") or f"User {uid}"),
+                    "position": (u.get("WORK_POSITION") or "").strip() or None,
+                    "photo": u.get("PERSONAL_PHOTO") or None,
+                }
+            if len(batch) < 50 or len(out) >= 1000:
+                break
+            start += 50
+    except Exception:  # noqa: BLE001 — the owner column is not worth a 500
+        return _USERS_CACHE["data"] or {}
+
+    _USERS_CACHE["data"] = out
+    _USERS_CACHE["at"] = time.time()
+    return out
+
+
 def sync_project_group(db: Session, client_id: int, bitrix_group_id: str) -> Project:
     """Sync a Bitrix24 Project Group (Metadata, Tasks, Members, Chats, Calls) locally."""
     # 1. Fetch group metadata
