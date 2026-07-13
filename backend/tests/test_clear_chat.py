@@ -32,6 +32,10 @@ def fresh_db():
     app.dependency_overrides[get_db] = _override_get_db
     Base.metadata.drop_all(bind=engine)
     Base.metadata.create_all(bind=engine)
+    from app.seed import seed_permissions
+    db = TestingSessionLocal()
+    seed_permissions(db)
+    db.close()
     yield
     if prev is not None:
         app.dependency_overrides[get_db] = prev

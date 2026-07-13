@@ -7,7 +7,7 @@ from app.deps import get_current_user
 from app.models.activity import Activity
 from app.models.client import Client
 from app.models.user import User
-from app.rbac import ensure_client_access
+from app.rbac import ensure_client_access, require_permission
 from app.schemas.ai import ActivityOut
 
 router = APIRouter(prefix="/api/activities", tags=["activities"])
@@ -18,7 +18,7 @@ def list_activities(
     client_id: int | None = None,
     limit: int = 50,
     db: Session = Depends(get_db),
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_permission("activity.view")),
 ):
     # Join the actor name in one query so the UI can show "Ravi uploaded…" rather
     # than a bare id (or "System" for everything).

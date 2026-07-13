@@ -10,8 +10,17 @@ from sqlalchemy.orm import Session
 from app.config import settings
 from app.database import get_db
 from app.deps import get_current_user
-from app.models.user import User, UserRole
-from app.schemas.auth import ChangePassword, InviteAccept, InviteInfo, Token, UserOut, UserCreate
+from app.models.user import User, UserRole, PasswordReset
+from app.schemas.auth import (
+    ChangePassword,
+    InviteAccept,
+    InviteInfo,
+    Token,
+    UserOut,
+    UserCreate,
+    ForgotPasswordRequest,
+    ResetPasswordRequest,
+)
 from app.services.auth_service import create_access_token, hash_password, verify_password
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
@@ -91,7 +100,12 @@ def change_password(
 
 
 @router.get("/me", response_model=UserOut)
-def me(user: User = Depends(get_current_user)):
+def me(
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user)
+):
+    from app.rbac import get_role_permissions
+    user.permissions = get_role_permissions(db, user.role)
     return user
 
 
@@ -152,4 +166,60 @@ def signup(payload: UserCreate, db: Session = Depends(get_db)):
     db.add(user)
     db.commit()
     db.refresh(user)
+    from app.rbac import get_role_permissions
+    user.permissions = get_role_permissions(db, user.role)
     return user
+
+
+import secrets
+from datetime import timedelta
+from app.services.email_service import send_password_reset_email
+from sqlalchemy import delete
+
+@router.post("/forgot-password")
+def forgot_password(payload: ForgotPasswordRequest, db: Session = Depends(get_db)):
+    user = db.execute(select(User).where(User.email == payload.email)).scalar_one_or_none()
+    if user and user.is_active and not user.is_pending:
+        # Delete old tokens
+        db.execute(delete(PasswordReset).where(PasswordReset.user_id == user.id))
+        db.flush()
+        
+        # Create token
+        token = secrets.token_urlsafe(32)
+        expires_at = datetime.now(timezone.utc) + timedelta(hours=2)
+        reset_record = PasswordReset(user_id=user.id, token=token, expires_at=expires_at)
+        db.add(reset_record)
+        db.commit()
+        
+        # Send email
+        reset_url = f"{settings.app_base_url}/reset-password?token={token}"
+        send_password_reset_email(user.email, user.name, reset_url)
+        
+    return {"status": "success", "message": "If the email is registered, you will receive a reset link."}
+
+
+@router.post("/reset-password")
+def reset_password(payload: ResetPasswordRequest, db: Session = Depends(get_db)):
+    stmt = select(PasswordReset).where(PasswordReset.token == payload.token)
+    reset_record = db.execute(stmt).scalar_one_or_none()
+    if not reset_record:
+        raise HTTPException(status_code=400, detail="Invalid or expired reset token")
+        
+    # Check expiry
+    expires_at = reset_record.expires_at
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+        
+    if datetime.now(timezone.utc) > expires_at:
+        db.delete(reset_record)
+        db.commit()
+        raise HTTPException(status_code=400, detail="Invalid or expired reset token")
+        
+    user = db.get(User, reset_record.user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+        
+    user.password_hash = hash_password(payload.password)
+    db.delete(reset_record)
+    db.commit()
+    return {"status": "success", "message": "Password reset successfully"}

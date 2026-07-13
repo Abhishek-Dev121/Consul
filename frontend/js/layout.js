@@ -4,23 +4,23 @@ const ROLE_RANK = { employee: 1, team_lead: 2, admin: 3, super_admin: 4 };
 
 const NAV = [
   { section: "Workspace", items: [
-    { href: "/dashboard", label: "Dashboard", icon: "home", min: "employee" },
-    { href: "/clients", label: "Clients", icon: "users", min: "employee" },
-    { href: "/conversations", label: "Conversations", icon: "message", min: "employee" },
-    { href: "/projects", label: "Projects", icon: "folder", min: "employee" },
+    { href: "/dashboard", label: "Dashboard", icon: "home", perm: "dashboard.view" },
+    { href: "/clients", label: "Clients", icon: "users", perm: "clients.view" },
+    { href: "/conversations", label: "Conversations", icon: "message", perm: "conversations.view" },
+    { href: "/projects", label: "Projects", icon: "folder", perm: "projects.view" },
   ]},
   { section: "Records", items: [
-    { href: "/calls", label: "Call Recordings", icon: "phone", min: "employee" },
-    { href: "/documents", label: "Documents", icon: "file", min: "employee" },
+    { href: "/calls", label: "Call Recordings", icon: "phone", perm: "calls.view" },
+    { href: "/documents", label: "Documents", icon: "file", perm: "documents.view" },
   ]},
   { section: "Intelligence", items: [
-    { href: "/reports", label: "Reports & Analytics", icon: "chart", min: "team_lead" },
+    { href: "/reports", label: "Reports & Analytics", icon: "chart", perm: "reports.view" },
   ]},
   { section: "Administration", items: [
-    { href: "/channels", label: "Channels", icon: "rss", min: "team_lead" },
-    { href: "/users", label: "Users & Roles", icon: "shield", min: "team_lead" },
-    { href: "/activity", label: "Activity Log", icon: "scroll", min: "team_lead" },
-    { href: "/bitrix", label: "Bitrix24", icon: "link", min: "admin" },
+    { href: "/channels", label: "Channels", icon: "rss", perm: "channels.view" },
+    { href: "/users", label: "Users & Roles", icon: "shield", perm: "users.view" },
+    { href: "/activity", label: "Activity Log", icon: "scroll", perm: "activity.view" },
+    { href: "/bitrix", label: "Bitrix24", icon: "link", perm: "bitrix.manage" },
   ]},
 ];
 
@@ -62,8 +62,14 @@ async function requireAuth() {
   }
 }
 
-function canWrite() { return CURRENT_USER && ROLE_RANK[CURRENT_USER.role] >= ROLE_RANK.team_lead; }
-function isAdmin() { return CURRENT_USER && ROLE_RANK[CURRENT_USER.role] >= ROLE_RANK.admin; }
+function hasPerm(code) {
+  if (!CURRENT_USER) return false;
+  if (CURRENT_USER.role === "super_admin") return true;
+  return Array.isArray(CURRENT_USER.permissions) && CURRENT_USER.permissions.includes(code);
+}
+
+function canWrite() { return hasPerm("messages.send") || hasPerm("clients.create"); }
+function isAdmin() { return hasPerm("users.manage") || hasPerm("channels.manage"); }
 function isSuperAdmin() { return CURRENT_USER && CURRENT_USER.role === "super_admin"; }
 
 function initials(name) {
@@ -93,7 +99,7 @@ function doRenderLayout(active, pageTitle, user, opts) {
   // ---- Sidebar ----
   const sections = NAV.map((sec) => {
     const links = sec.items
-      .filter((n) => user && ROLE_RANK[user.role] >= ROLE_RANK[n.min])
+      .filter((n) => hasPerm(n.perm))
       .map((n) => `<a class="nav-link ${n.href === active ? "active" : ""}" href="${n.href}" title="${n.label}">
         <span class="ico">${Icon(n.icon, { size: 17 })}</span><span>${n.label}</span></a>`).join("");
     if (!links) return "";
@@ -113,7 +119,7 @@ function doRenderLayout(active, pageTitle, user, opts) {
         <div class="dropdown dropup profile-dd">
           <button class="profile-trigger" data-bs-toggle="dropdown" aria-expanded="false">
             <span class="av">${initials(user.name)}</span>
-            <span class="role-txt">${user.role.replace("_", " ")}</span>
+            <span class="role-txt">${(user.role || "").replace("_", " ")}</span>
             <span class="chev">${Icon("chevronDown", { size: 14 })}</span>
           </button>
           <div class="dropdown-menu profile-menu">
@@ -122,7 +128,7 @@ function doRenderLayout(active, pageTitle, user, opts) {
               <div class="pm-info">
                 <div class="nm">${esc(user.name)}</div>
                 <div class="em">${esc(user.email)}</div>
-                <span class="chip info mt-1" style="text-transform:capitalize">${user.role.replace("_", " ")}</span>
+                <span class="chip info mt-1" style="text-transform:capitalize">${(user.role || "").replace("_", " ")}</span>
               </div>
             </div>
             <div class="dropdown-divider"></div>
@@ -201,8 +207,8 @@ async function renderLayout(active, pageTitle, opts = {}) {
   const user = await requireAuth();
   cacheUser(user, !!localStorage.getItem("comm_agent_token"));
 
-  // 3. Re-render if the user details changed or if we didn't have cache
-  if (!cachedUser || cachedUser.name !== user.name || cachedUser.role !== user.role) {
+  // 3. Re-render if the user details or permissions changed, or if we didn't have cache
+  if (!cachedUser || cachedUser.name !== user.name || cachedUser.role !== user.role || JSON.stringify(cachedUser.permissions) !== JSON.stringify(user.permissions)) {
     doRenderLayout(active, pageTitle, user, opts);
   }
 }
@@ -414,16 +420,17 @@ function confirmDialog(message, opts = {}) {
 function ensureAccountModal() {
   if (document.getElementById("accountModal")) return;
   const u = CURRENT_USER;
+  if (!u) return;
   const html = `
   <div class="modal fade" id="accountModal" tabindex="-1"><div class="modal-dialog"><div class="modal-content">
-    <div class="modal-header"><h5 class="modal-title">My account</h5><button class="btn-close" data-bs-dismiss="modal"></button></div>
-    <div class="modal-body">
-      <div class="d-flex align-items-center gap-3 mb-3">
-        <span class="av role-${u.role}" style="width:52px;height:52px;font-size:18px;color:#fff">${initials(u.name)}</span>
-        <div><div style="font-family:var(--display);font-weight:600;font-size:16px">${esc(u.name)}</div>
-          <div class="muted">${esc(u.email)}</div>
-          <span class="chip info mt-1 d-inline-block" style="text-transform:capitalize">${u.role.replace("_", " ")}</span></div>
-      </div>
+     <div class="modal-header"><h5 class="modal-title">My account</h5><button class="btn-close" data-bs-dismiss="modal"></button></div>
+     <div class="modal-body">
+       <div class="d-flex align-items-center gap-3 mb-3">
+         <span class="av role-${u.role || ''}" style="width:52px;height:52px;font-size:18px;color:#fff">${initials(u.name)}</span>
+         <div><div style="font-family:var(--display);font-weight:600;font-size:16px">${esc(u.name)}</div>
+           <div class="muted">${esc(u.email)}</div>
+           <span class="chip info mt-1 d-inline-block" style="text-transform:capitalize">${(u.role || "").replace("_", " ")}</span></div>
+       </div>
       <hr>
       <form autocomplete="off" onsubmit="return false;">
         <!-- Hidden off-screen inputs to capture browser autofill -->

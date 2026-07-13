@@ -7,6 +7,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Resolve the repo-root .env by absolute path so config loads whether the app is
@@ -19,6 +20,41 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=str(_ENV_FILE), env_file_encoding="utf-8", extra="ignore"
     )
+
+    @model_validator(mode="before")
+    @classmethod
+    def map_email_env_to_smtp(cls, data: dict) -> dict:
+        if isinstance(data, dict):
+            # Check for EMAIL_HOST
+            email_host = data.get("EMAIL_HOST") or data.get("email_host")
+            if email_host and not (data.get("smtp_host") or data.get("SMTP_HOST")):
+                data["smtp_host"] = email_host
+                
+            email_port = data.get("EMAIL_PORT") or data.get("email_port")
+            if email_port and not (data.get("smtp_port") or data.get("SMTP_PORT")):
+                try:
+                    data["smtp_port"] = int(email_port)
+                except ValueError:
+                    pass
+                    
+            email_user = data.get("EMAIL_HOST_USER") or data.get("email_host_user")
+            if email_user:
+                if not (data.get("smtp_user") or data.get("SMTP_USER")):
+                    data["smtp_user"] = email_user
+                if not (data.get("smtp_from") or data.get("SMTP_FROM") or data.get("smtp_from") == "no-reply@devexhub.com"):
+                    data["smtp_from"] = email_user
+                    
+            email_pass = data.get("EMAIL_HOST_PASSWORD") or data.get("email_host_password")
+            if email_pass and not (data.get("smtp_password") or data.get("SMTP_PASSWORD")):
+                data["smtp_password"] = email_pass
+                
+            email_tls = data.get("EMAIL_USE_TLS") or data.get("email_use_tls")
+            if email_tls is not None and not (data.get("smtp_tls") or data.get("SMTP_TLS")):
+                if isinstance(email_tls, str):
+                    data["smtp_tls"] = email_tls.lower() in ("true", "1", "yes")
+                else:
+                    data["smtp_tls"] = bool(email_tls)
+        return data
 
     # --- Core ---
     app_name: str = "Bitrix24 Local App"

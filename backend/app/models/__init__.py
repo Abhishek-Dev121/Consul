@@ -1,5 +1,5 @@
 """Import all models so Alembic + SQLAlchemy see them on the Base metadata."""
-from app.models.user import User, UserRole  # noqa: F401
+from app.models.user import User, UserRole, PasswordReset  # noqa: F401
 from app.models.channel import Channel  # noqa: F401
 from app.models.client import (  # noqa: F401
     Client,
@@ -15,3 +15,5 @@ from app.models.activity import Activity  # noqa: F401
 from app.models.ai_analysis import AIAnalysis  # noqa: F401
 from app.models.bitrix import BitrixToken  # noqa: F401
 from app.models.read_state import ClientRead, MessageHidden  # noqa: F401
+from app.models.permission import Permission, RolePermission  # noqa: F401
+

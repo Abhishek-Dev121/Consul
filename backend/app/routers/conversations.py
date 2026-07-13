@@ -7,7 +7,7 @@ from app.deps import get_current_user
 from app.models.client import Client
 from app.models.conversation import Conversation, ConversationNote
 from app.models.user import User, UserRole
-from app.rbac import accessible_client_ids, ensure_can_write, ensure_client_access, has_min_role
+from app.rbac import accessible_client_ids, ensure_can_write, ensure_client_access, has_min_role, require_permission
 from app.schemas.conversation import (
     ConversationCreate,
     ConversationOut,
@@ -33,7 +33,7 @@ def list_conversations(
     q: str | None = None,
     is_deleted: bool | None = None,
     db: Session = Depends(get_db),
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_permission("conversations.view")),
 ):
     from sqlalchemy.orm import selectinload
     stmt = select(Conversation).options(selectinload(Conversation.notes)).order_by(Conversation.created_at.desc())
@@ -54,7 +54,7 @@ def list_conversations(
 
 
 @router.get("/{conv_id}", response_model=ConversationOut)
-def get_conversation(conv_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+def get_conversation(conv_id: int, db: Session = Depends(get_db), user: User = Depends(require_permission("conversations.view"))):
     conv = _load(db, conv_id)
     ensure_client_access(user, db.get(Client, conv.client_id))
     return conv
@@ -64,13 +64,12 @@ def get_conversation(conv_id: int, db: Session = Depends(get_db), user: User = D
 def create_conversation(
     payload: ConversationCreate,
     db: Session = Depends(get_db),
-    actor: User = Depends(get_current_user),
+    actor: User = Depends(require_permission("conversations.reply")),
 ):
     client = db.get(Client, payload.client_id)
     if not client:
         raise HTTPException(status_code=404, detail="Client not found")
     ensure_client_access(actor, client)
-    ensure_can_write(actor)
     conv = Conversation(
         client_id=payload.client_id,
         channel_id=payload.channel_id,
@@ -94,11 +93,10 @@ def add_note(
     conv_id: int,
     payload: NoteCreate,
     db: Session = Depends(get_db),
-    actor: User = Depends(get_current_user),
+    actor: User = Depends(require_permission("conversations.reply")),
 ):
     conv = _load(db, conv_id)
-    ensure_client_access(actor, db.get(Client, conv.client_id))
-    ensure_can_write(actor)  # team leads + admins can annotate; employees are read-only
+    ensure_client_access(actor, db.get(Client, conv.client_id))  # team leads + admins can annotate; employees are read-only
     note = ConversationNote(conversation_id=conv_id, author_id=actor.id, body=payload.body)
     db.add(note)
     db.commit()
@@ -108,11 +106,10 @@ def add_note(
 
 @router.delete("/{conv_id}", status_code=204)
 def delete_conversation(
-    conv_id: int, db: Session = Depends(get_db), actor: User = Depends(get_current_user)
+    conv_id: int, db: Session = Depends(get_db), actor: User = Depends(require_permission("conversations.delete"))
 ):
     conv = _load(db, conv_id)
     ensure_client_access(actor, db.get(Client, conv.client_id))
-    ensure_can_write(actor)
     conv.is_deleted = True  # soft delete — keep the record, just flag it
     log_activity(db, action="conversation.deleted", actor_id=actor.id, client_id=conv.client_id,
                  detail={"conversation_id": conv.id})
@@ -121,12 +118,11 @@ def delete_conversation(
 
 @router.post("/{conv_id}/restore", status_code=204)
 def restore_conversation(
-    conv_id: int, db: Session = Depends(get_db), actor: User = Depends(get_current_user)
+    conv_id: int, db: Session = Depends(get_db), actor: User = Depends(require_permission("conversations.delete"))
 ):
     """Un-archive a soft-deleted conversation so it returns to the active list."""
     conv = _load(db, conv_id)
     ensure_client_access(actor, db.get(Client, conv.client_id))
-    ensure_can_write(actor)
     conv.is_deleted = False
     log_activity(db, action="conversation.restored", actor_id=actor.id, client_id=conv.client_id,
                  detail={"conversation_id": conv.id})
@@ -135,14 +131,12 @@ def restore_conversation(
 
 @router.delete("/{conv_id}/permanent", status_code=204)
 def permanently_delete_conversation(
-    conv_id: int, db: Session = Depends(get_db), actor: User = Depends(get_current_user)
+    conv_id: int, db: Session = Depends(get_db), actor: User = Depends(require_permission("conversations.delete"))
 ):
     """Hard-delete an archived conversation (and its messages, via cascade).
     Only conversations already in the Archive (soft-deleted) can be purged this way."""
     conv = _load(db, conv_id)
     ensure_client_access(actor, db.get(Client, conv.client_id))
-    if not has_min_role(actor, UserRole.admin):
-        raise HTTPException(status_code=403, detail="Only admins can permanently delete conversations")
     if not conv.is_deleted:
         raise HTTPException(status_code=400, detail="Only archived conversations can be permanently deleted")
     client_id = conv.client_id
@@ -156,7 +150,7 @@ def permanently_delete_conversation(
 def list_conversation_messages(
     conv_id: int,
     db: Session = Depends(get_db),
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_permission("conversations.view")),
 ):
     conv = _load(db, conv_id)
     ensure_client_access(user, db.get(Client, conv.client_id))

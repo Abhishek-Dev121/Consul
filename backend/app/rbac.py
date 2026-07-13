@@ -8,14 +8,59 @@ threshold. Resource-level ownership (e.g. a team lead only sees assigned clients
 enforced in the routers using `is_assigned_to_client`.
 """
 from fastapi import Depends, HTTPException, status
+from sqlalchemy import select
 
 from app.deps import get_current_user
 from app.models.client import Client
 from app.models.user import ROLE_RANK, User, UserRole
+from app.cache import ttl_cache
+from app.models.permission import Permission, RolePermission
+
+
+def get_role_permissions(db, role: UserRole) -> list[str]:
+    cache_key = f"role_permissions:{role.value}"
+    cached = ttl_cache.get(cache_key)
+    if cached is not None:
+        return cached
+
+    stmt = (
+        select(Permission.code)
+        .join(RolePermission, RolePermission.permission_id == Permission.id)
+        .where(RolePermission.role == role)
+    )
+    codes = db.execute(stmt).scalars().all()
+    ttl_cache.set(cache_key, codes, ttl=300)
+    return codes
+
+
+def has_permission(db, user: User, permission_code: str) -> bool:
+    if user.role == UserRole.super_admin:
+        return True
+    permissions = get_role_permissions(db, user.role)
+    return permission_code in permissions
+
+
+def require_permission(permission_code: str):
+    """Dependency factory: 403 unless the current user has the required permission."""
+    from app.database import get_db
+
+    def _checker(
+        user: User = Depends(get_current_user),
+        db = Depends(get_db)
+    ) -> User:
+        if not has_permission(db, user, permission_code):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Missing required permission: {permission_code}",
+            )
+        return user
+
+    return _checker
 
 
 def has_min_role(user: User, min_role: UserRole) -> bool:
     return ROLE_RANK[user.role] >= ROLE_RANK[min_role]
+
 
 
 def require_role(min_role: UserRole):

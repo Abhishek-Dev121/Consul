@@ -25,6 +25,8 @@ _PAGES = {
     "/users": "users.html",
     "/bitrix": "bitrix.html",
     "/accept-invite": "invite.html",
+    "/forgot-password": "forgot_password.html",
+    "/reset-password": "reset_password.html",
 }
 
 

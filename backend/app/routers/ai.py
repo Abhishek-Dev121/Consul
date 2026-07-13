@@ -8,7 +8,7 @@ from app.models.ai_analysis import AIAnalysis, AnalysisTarget
 from app.models.client import Client
 from app.models.conversation import Conversation
 from app.models.user import User
-from app.rbac import ensure_can_write, ensure_client_access
+from app.rbac import ensure_client_access, require_permission
 from app.schemas.ai import AIAnalysisOut
 from app.services import ai_service
 from app.services.activity_service import log_activity
@@ -18,13 +18,16 @@ router = APIRouter(prefix="/api/ai", tags=["ai"])
 
 
 @router.post("/conversations/{conv_id}/analyze", response_model=AIAnalysisOut)
-def analyze_conversation(conv_id: int, db: Session = Depends(get_db), actor: User = Depends(get_current_user)):
+def analyze_conversation(
+    conv_id: int,
+    db: Session = Depends(get_db),
+    actor: User = Depends(require_permission("ai.analyze"))
+):
     conv = db.get(Conversation, conv_id)
     if not conv:
         raise HTTPException(status_code=404, detail="Conversation not found")
     client = db.get(Client, conv.client_id)
     ensure_client_access(actor, client)
-    ensure_can_write(actor)
 
     # Fetch live messages, files, and audio recordings to build the transcript
     from app.models.message import Message
@@ -124,7 +127,11 @@ def analyze_conversation(conv_id: int, db: Session = Depends(get_db), actor: Use
 
 
 @router.get("/conversations/{conv_id}/analysis", response_model=AIAnalysisOut | None)
-def latest_conversation_analysis(conv_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+def latest_conversation_analysis(
+    conv_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_permission("conversations.view"))
+):
     conv = db.get(Conversation, conv_id)
     if not conv:
         raise HTTPException(status_code=404, detail="Conversation not found")

@@ -9,7 +9,7 @@ from app.deps import get_current_user
 from app.models.client import Client
 from app.models.project import Project
 from app.models.user import User, UserRole
-from app.rbac import require_role
+from app.rbac import require_role, require_permission
 from app.services import bitrix_service
 from app.services.activity_service import log_activity
 
@@ -22,7 +22,7 @@ class LinkProjectPayload(BaseModel):
 
 
 @router.get("/status")
-def status(db: Session = Depends(get_db), _: User = Depends(get_current_user)):
+def status(db: Session = Depends(get_db), _: User = Depends(require_permission("bitrix.manage"))):
     from app.config import settings
     is_conn = bitrix_service.is_connected(db)
     method = "webhook" if settings.bitrix_webhook_url else "oauth" if is_conn else None
@@ -34,7 +34,7 @@ def status(db: Session = Depends(get_db), _: User = Depends(get_current_user)):
 
 
 @router.get("/connect")
-def connect(_: User = Depends(require_role(UserRole.admin))):
+def connect(_: User = Depends(require_permission("bitrix.manage"))):
     """Return the Bitrix24 OAuth authorize URL for the admin to open."""
     return {"authorize_url": bitrix_service.authorize_url()}
 
@@ -54,7 +54,7 @@ def callback(code: str = Query(...), db: Session = Depends(get_db)):
 
 
 @router.get("/groups")
-def list_groups(db: Session = Depends(get_db), _: User = Depends(get_current_user)):
+def list_groups(db: Session = Depends(get_db), _: User = Depends(require_permission("bitrix.manage"))):
     """Fetch all project groups from Bitrix24."""
     try:
         groups = bitrix_service.fetch_project_groups(db)
@@ -67,7 +67,7 @@ def list_groups(db: Session = Depends(get_db), _: User = Depends(get_current_use
 def sync_client_groups(
     client_id: int,
     db: Session = Depends(get_db),
-    actor: User = Depends(require_role(UserRole.team_lead)),
+    actor: User = Depends(require_permission("bitrix.manage")),
 ):
     """Sync all linked project groups for a given client."""
     client = db.get(Client, client_id)
@@ -96,7 +96,7 @@ def sync_client_groups(
 def link_project(
     payload: LinkProjectPayload,
     db: Session = Depends(get_db),
-    actor: User = Depends(require_role(UserRole.team_lead)),
+    actor: User = Depends(require_permission("bitrix.manage")),
 ):
     """Link a Bitrix24 project group to a client and trigger initial sync."""
     client = db.get(Client, payload.client_id)
@@ -116,7 +116,7 @@ def link_project(
 def unlink_project(
     project_id: int,
     db: Session = Depends(get_db),
-    actor: User = Depends(require_role(UserRole.team_lead)),
+    actor: User = Depends(require_permission("bitrix.manage")),
 ):
     """Unlink a project group from a client."""
     proj = db.get(Project, project_id)
@@ -134,7 +134,7 @@ def unlink_project(
 def sync_project(
     project_id: int,
     db: Session = Depends(get_db),
-    actor: User = Depends(require_role(UserRole.team_lead)),
+    actor: User = Depends(require_permission("bitrix.manage")),
 ):
     """Manually trigger a sync for a specific project group."""
     proj = db.get(Project, project_id)

@@ -12,7 +12,7 @@ from app.deps import get_current_user
 from app.models.client import Client
 from app.models.file import FileRecord
 from app.models.user import User
-from app.rbac import ensure_can_write, ensure_client_access
+from app.rbac import ensure_can_write, ensure_client_access, require_permission
 from app.schemas.file import FileOut
 from app.schemas.ai import AIAnalysisOut
 from app.services import storage_service
@@ -26,7 +26,7 @@ def list_files(
     client_id: int,
     archived: bool = False,
     db: Session = Depends(get_db),
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_permission("documents.view")),
 ):
     ensure_client_access(user, _client(db, client_id))
     from app.models.project import Project
@@ -66,11 +66,10 @@ async def upload_file(
     project_id: int | None = Form(None),
     upload: UploadFile = File(...),
     db: Session = Depends(get_db),
-    actor: User = Depends(get_current_user),
+    actor: User = Depends(require_permission("documents.upload")),
 ):
     client = _client(db, client_id)
     ensure_client_access(actor, client)
-    ensure_can_write(actor)
     
     from app.models.project import Project
     if project_id is None:
@@ -121,11 +120,10 @@ def add_document_link(
     url: str = Form(...),
     title: str = Form(...),
     db: Session = Depends(get_db),
-    actor: User = Depends(get_current_user),
+    actor: User = Depends(require_permission("documents.upload")),
 ):
     client = _client(db, client_id)
     ensure_client_access(actor, client)
-    ensure_can_write(actor)
     
     from app.models.project import Project
     if project_id is None:
@@ -159,7 +157,7 @@ def add_document_link(
 
 
 @router.get("/{file_id}/download")
-def download_file(file_id: int, request: Request, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+def download_file(file_id: int, request: Request, db: Session = Depends(get_db), user: User = Depends(require_permission("documents.view"))):
     rec = db.get(FileRecord, file_id)
     if not rec:
         raise HTTPException(status_code=404, detail="File not found")
@@ -188,39 +186,36 @@ def download_file(file_id: int, request: Request, db: Session = Depends(get_db),
 
 
 @router.post("/{file_id}/archive", status_code=204)
-def archive_file(file_id: int, db: Session = Depends(get_db), actor: User = Depends(get_current_user)):
+def archive_file(file_id: int, db: Session = Depends(get_db), actor: User = Depends(require_permission("documents.delete"))):
     """Soft-delete: move the file to the Archive. Reversible via /restore."""
     rec = db.get(FileRecord, file_id)
     if not rec:
         raise HTTPException(status_code=404, detail="File not found")
     ensure_client_access(actor, _client(db, rec.client_id))
-    ensure_can_write(actor)
     rec.archived_at = datetime.now(timezone.utc)
     db.commit()
     invalidate_cache("documents:", "dashboard:")
 
 
 @router.post("/{file_id}/restore", status_code=204)
-def restore_file(file_id: int, db: Session = Depends(get_db), actor: User = Depends(get_current_user)):
+def restore_file(file_id: int, db: Session = Depends(get_db), actor: User = Depends(require_permission("documents.delete"))):
     """Move an archived file back to the active list."""
     rec = db.get(FileRecord, file_id)
     if not rec:
         raise HTTPException(status_code=404, detail="File not found")
     ensure_client_access(actor, _client(db, rec.client_id))
-    ensure_can_write(actor)
     rec.archived_at = None
     db.commit()
     invalidate_cache("documents:", "dashboard:")
 
 
 @router.delete("/{file_id}", status_code=204)
-def delete_file(file_id: int, db: Session = Depends(get_db), actor: User = Depends(get_current_user)):
+def delete_file(file_id: int, db: Session = Depends(get_db), actor: User = Depends(require_permission("documents.delete"))):
     """Permanent delete: removes the DB row and the file on disk."""
     rec = db.get(FileRecord, file_id)
     if not rec:
         raise HTTPException(status_code=404, detail="File not found")
     ensure_client_access(actor, _client(db, rec.client_id))
-    ensure_can_write(actor)
     # Remove the bytes too (not for external links, which have no local file).
     if rec.content_type != "url":
         try:
@@ -246,7 +241,7 @@ def _client(db: Session, client_id: int) -> Client:
 def analyze_file(
     file_id: int,
     db: Session = Depends(get_db),
-    actor: User = Depends(get_current_user),
+    actor: User = Depends(require_permission("ai.analyze")),
 ):
     rec = db.get(FileRecord, file_id)
     if not rec:
@@ -254,7 +249,6 @@ def analyze_file(
         
     client = db.get(Client, rec.client_id)
     ensure_client_access(actor, client)
-    ensure_can_write(actor)
     
     # 1. Extract text
     if rec.content_type == "url":
@@ -325,7 +319,7 @@ def analyze_file(
 def get_file_analysis(
     file_id: int,
     db: Session = Depends(get_db),
-    actor: User = Depends(get_current_user),
+    actor: User = Depends(require_permission("documents.view")),
 ):
     rec = db.get(FileRecord, file_id)
     if not rec:

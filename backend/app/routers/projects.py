@@ -7,7 +7,7 @@ from app.deps import get_current_user
 from app.models.client import Client
 from app.models.project import Project
 from app.models.user import User
-from app.rbac import accessible_client_ids, ensure_client_access
+from app.rbac import accessible_client_ids, ensure_client_access, require_permission
 from app.schemas.project import ProjectOut
 
 router = APIRouter(prefix="/api/projects", tags=["projects"])
@@ -17,7 +17,7 @@ router = APIRouter(prefix="/api/projects", tags=["projects"])
 def list_projects(
     client_id: int | None = None,
     db: Session = Depends(get_db),
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_permission("projects.view")),
 ):
     from app.services import bitrix_service
     from sqlalchemy.orm import selectinload

@@ -14,7 +14,7 @@ from app.models.conversation import Conversation
 from app.models.file import FileRecord
 from app.models.message import Message
 from app.models.user import User, UserRole
-from app.rbac import ensure_can_write, ensure_client_access, has_min_role
+from app.rbac import ensure_can_write, ensure_client_access, has_min_role, require_permission
 from app.schemas.message import MessageCreate, MessageEdit, MessageOut
 from app.services import chat_service, storage_service
 from app.services.activity_service import log_activity
@@ -55,7 +55,7 @@ def _ensure_conversation(db: Session, client: Client, channel_id: int | None) ->
 
 
 @router.get("/{client_id}/messages", response_model=list[MessageOut])
-def list_messages(client_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+def list_messages(client_id: int, db: Session = Depends(get_db), user: User = Depends(require_permission("conversations.view"))):
     client = _client(db, client_id)
     ensure_client_access(user, client)
     messages = chat_service.list_client_messages(db, client)
@@ -242,11 +242,10 @@ def send_message(
     client_id: int,
     payload: MessageCreate,
     db: Session = Depends(get_db),
-    actor: User = Depends(get_current_user),
+    actor: User = Depends(require_permission("messages.send")),
 ):
     client = _client(db, client_id)
     ensure_client_access(actor, client)
-    ensure_can_write(actor)
     if not payload.body.strip():
         raise HTTPException(status_code=400, detail="Message body is required")
     channel_id = payload.channel_id
@@ -352,13 +351,12 @@ async def send_attachment(
     client_id: int,
     upload: UploadFile = File(...),
     db: Session = Depends(get_db),
-    actor: User = Depends(get_current_user),
+    actor: User = Depends(require_permission("messages.upload")),
 ):
     """Upload a file or audio in the chat. Stored in the client's folder, recorded
     as a File/Audio, and posted as a chat message with an attachment."""
     client = _client(db, client_id)
     ensure_client_access(actor, client)
-    ensure_can_write(actor)
     data = await upload.read()
     filename = upload.filename or "attachment"
     ext = Path(filename).suffix.lower()
@@ -428,12 +426,10 @@ def _wipe_messages(db: Session, client_ids: list[int]) -> int:
 
 
 @router.delete("/messages/all", status_code=200)
-def clear_all_chats(db: Session = Depends(get_db), actor: User = Depends(get_current_user)):
+def clear_all_chats(db: Session = Depends(get_db), actor: User = Depends(require_permission("conversations.clear_all"))):
     """Wipe every message in every conversation. Super Admin only — this is the
     most destructive action in the app, so it deliberately ignores assignment
     scoping and is not available to admins."""
-    if actor.role != UserRole.super_admin:
-        raise HTTPException(status_code=403, detail="Only a Super Admin can clear all chats")
     client_ids = db.execute(select(Client.id)).scalars().all()
     removed = _wipe_messages(db, list(client_ids))
     log_activity(db, action="chat.cleared_all", actor_id=actor.id,
@@ -443,12 +439,11 @@ def clear_all_chats(db: Session = Depends(get_db), actor: User = Depends(get_cur
 
 
 @router.delete("/{client_id}/messages", status_code=200)
-def clear_chat(client_id: int, db: Session = Depends(get_db), actor: User = Depends(get_current_user)):
+def clear_chat(client_id: int, db: Session = Depends(get_db), actor: User = Depends(require_permission("conversations.clear"))):
     """Clear one client's chat: every message goes, for everyone. Attachments stay
     on disk and remain listed under Documents / Call Recordings."""
     client = _client(db, client_id)
     ensure_client_access(actor, client)
-    ensure_can_write(actor)
     removed = _wipe_messages(db, [client.id])
     log_activity(db, action="chat.cleared", actor_id=actor.id, client_id=client.id,
                  detail={"messages": removed})
@@ -478,10 +473,9 @@ def _own_recent_message(db: Session, client_id: int, message_id: int, actor: Use
 @router.patch("/{client_id}/messages/{message_id}", response_model=MessageOut)
 def edit_message(
     client_id: int, message_id: int, payload: MessageEdit,
-    db: Session = Depends(get_db), actor: User = Depends(get_current_user),
+    db: Session = Depends(get_db), actor: User = Depends(require_permission("messages.edit")),
 ):
     """Edit the text of your own message (within 24h). Attachments can't be edited."""
-    ensure_can_write(actor)
     msg = _own_recent_message(db, client_id, message_id, actor)
     if msg.attachment_type:
         raise HTTPException(status_code=400, detail="Media messages can't be edited")
@@ -499,11 +493,10 @@ def edit_message(
 @router.delete("/{client_id}/messages/{message_id}", status_code=204)
 def delete_message(
     client_id: int, message_id: int,
-    db: Session = Depends(get_db), actor: User = Depends(get_current_user),
+    db: Session = Depends(get_db), actor: User = Depends(require_permission("conversations.delete")),
 ):
     """Delete-for-everyone: soft-delete your own message (within 24h). The row
     stays as a 'This message was deleted' placeholder, WhatsApp-style."""
-    ensure_can_write(actor)
     msg = _own_recent_message(db, client_id, message_id, actor)
     msg.is_deleted = True
     db.commit()
@@ -512,7 +505,7 @@ def delete_message(
 @router.post("/{client_id}/messages/{message_id}/hide", status_code=204)
 def hide_message(
     client_id: int, message_id: int,
-    db: Session = Depends(get_db), actor: User = Depends(get_current_user),
+    db: Session = Depends(get_db), actor: User = Depends(require_permission("conversations.view")),
 ):
     """Delete-for-me: hide a message from the current user's own view only. Any
     message can be hidden; it stays visible to everyone else."""

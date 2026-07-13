@@ -269,7 +269,10 @@
       is_active: document.getElementById("e-status").value === "true",
     };
     const pw = document.getElementById("e-password").value;
-    if (pw) body.password = pw;
+    if (pw) {
+      body.password = pw;
+      body.send_email = document.getElementById("e-send-email").checked;
+    }
     try {
       await Api.patch(`/api/users/${editingId}`, body);
       bootstrap.Modal.getOrCreateInstance(document.getElementById("editModal")).hide();
@@ -313,6 +316,48 @@
   };
 
   // ================= Init =================
+  let permissionsData = null;
+  let selectedRole = sessionStorage.getItem("selected_role_tab") || "super_admin";
+
+  async function loadPermissions() {
+    try {
+      permissionsData = await Api.get("/api/permissions");
+    } catch (e) {
+      console.log("Failed to load dynamic permissions mapping:", e.message);
+    }
+  }
+
+  async function togglePermission(role, code, checked) {
+    if (!permissionsData) return;
+    let rolePerms = permissionsData.roles[role] || [];
+    if (checked) {
+      if (!rolePerms.includes(code)) rolePerms.push(code);
+    } else {
+      rolePerms = rolePerms.filter((c) => c !== code);
+    }
+    permissionsData.roles[role] = rolePerms;
+    try {
+      await Api.put(`/api/permissions/roles/${role}`, { permissions: rolePerms });
+      toast("Permission updated successfully", "success");
+    } catch (e) {
+      toast("Failed to save permission change: " + e.message);
+      await loadPermissions();
+      renderRolesBlock();
+    }
+  }
+
+  async function resetPermissionsToDefault() {
+    if (!(await confirmDialog("Are you sure you want to reset all role permissions to factory defaults?", { title: "Reset Permissions?", confirmText: "Reset" }))) return;
+    try {
+      await Api.post("/api/permissions/reset");
+      toast("Permissions reset to defaults", "success");
+      await loadPermissions();
+      renderRolesBlock();
+    } catch (e) {
+      toast("Failed to reset permissions: " + e.message);
+    }
+  }
+
   function renderRolesBlock() {
     const ROLE_DESC = {
       super_admin: { label: "Super Admin", desc: "Full access to channels, clients, projects, documents, reports, users and settings." },
@@ -321,34 +366,110 @@
       employee: { label: "Employee", desc: "Read-only access to assigned chats, clients, projects and documents." },
     };
     const me = CURRENT_USER.role;
-    const cards = Object.entries(ROLE_DESC).map(([k, r]) => `
-      <div class="card card-pad" style="${k === me ? "border-color:var(--brand);box-shadow:0 0 0 3px var(--brand-soft)" : ""}">
-        <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
-          <span style="width:30px;height:30px;border-radius:8px;background:var(--brand-soft);color:var(--brand);display:grid;place-items:center">${Icon("shield", { size: 16 })}</span>
-          <div style="font-family:var(--display);font-weight:600;font-size:14px">${r.label}</div></div>
-        <p style="font-size:11.5px;color:var(--muted);line-height:1.5">${r.desc}</p>
-        ${k === me ? '<div style="margin-top:9px"><span class="spill s-pos"><span class="pdot"></span>Your role</span></div>' : ""}
-      </div>`).join("");
+    const cards = Object.entries(ROLE_DESC).map(([k, r]) => {
+      const activeBorder = k === selectedRole ? "border-color:var(--brand);box-shadow:0 0 0 3px var(--brand-soft)" : "";
+      return `
+        <div class="card card-pad role-card" data-role="${k}" style="cursor:pointer; ${activeBorder}">
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+            <span style="width:30px;height:30px;border-radius:8px;background:var(--brand-soft);color:var(--brand);display:grid;place-items:center">${Icon("shield", { size: 16 })}</span>
+            <div style="font-family:var(--display);font-weight:600;font-size:14px">${r.label}</div></div>
+          <p style="font-size:11.5px;color:var(--muted);line-height:1.5">${r.desc}</p>
+          ${k === me ? '<div style="margin-top:9px"><span class="spill s-pos"><span class="pdot"></span>Your role</span></div>' : ""}
+        </div>`;
+    }).join("");
 
-    const caps = [
-      ["View assigned chats", 1, 1, 1, 1], ["View clients & projects", 1, 1, 1, 1],
-      ["View documents", 1, 1, 1, 1], ["Reply when last msg from Admin", 1, 1, 1, 0],
-      ["Reply to any conversation", 1, 1, 0, 0], ["Upload chats / calls / docs", 1, 1, 1, 0],
-      ["Manage clients & projects", 1, 1, 0, 0], ["Manage channels", 1, 1, 0, 0],
-      ["Manage users & roles", 1, 1, 0, 0], ["Create Super Admins", 1, 0, 0, 0],
-      ["System settings", 1, 0, 0, 0],
-    ];
-    const yn = (v) => v ? `<span class="yes">${Icon("check", { size: 13 })}</span>` : `<span class="no">${Icon("x", { size: 13 })}</span>`;
-    const matrix = `<div class="card" style="margin:16px 0"><div class="card-h"><h3>Permission matrix</h3></div>
-      <table class="table matrix"><thead><tr><th>Capability</th><th>Super Admin</th><th>Admin</th><th>Team Lead</th><th>Employee</th></tr></thead>
-      <tbody>${caps.map((c) => `<tr><td>${c[0]}</td><td>${yn(c[1])}</td><td>${yn(c[2])}</td><td>${yn(c[3])}</td><td>${yn(c[4])}</td></tr>`).join("")}</tbody></table></div>`;
+    const isSuper = CURRENT_USER.role === "super_admin";
+    
+    let matrixHtml = "";
+    if (permissionsData) {
+      const rowsHtml = permissionsData.permissions.map((p) => {
+        const has = permissionsData.roles[selectedRole] && permissionsData.roles[selectedRole].includes(p.code);
+        const disabled = !isSuper;
+        return `<tr>
+          <td>
+            <strong>${esc(p.name)}</strong>
+            <div class="small text-muted" style="font-size:11px">${esc(p.description)}</div>
+          </td>
+          <td class="text-center" style="width:120px">
+            <div class="form-check form-switch d-inline-block">
+              <input type="checkbox" class="form-check-input perm-toggle" 
+                     data-role="${selectedRole}" data-code="${p.code}" 
+                     ${has ? "checked" : ""} ${disabled ? "disabled" : ""}>
+            </div>
+          </td>
+        </tr>`;
+      }).join("");
+      
+      const roleLabel = ROLE_DESC[selectedRole] ? ROLE_DESC[selectedRole].label : selectedRole;
+      
+      const actionsHtml = isSuper ? `
+        <div style="display:flex;gap:8px">
+          <button class="btn btn-sm btn-outline-danger" id="reset-perms-btn">Reset to Defaults</button>
+        </div>` : "";
+      
+      matrixHtml = `
+        <div class="card" style="margin:16px 0">
+          <div class="card-header d-flex justify-content-between align-items-center" style="padding:12px 16px;background:none;border-bottom:1px solid var(--border)">
+            <h3 class="mb-0" style="font-family:var(--display);font-size:14px;font-weight:600">Permissions for <span style="color:var(--brand)">${roleLabel}</span></h3>
+            ${actionsHtml}
+          </div>
+          <div class="table-responsive">
+            <table class="table matrix align-middle" style="margin-bottom:0">
+              <thead>
+                <tr>
+                  <th>Capability</th>
+                  <th class="text-center" style="width:120px">Allowed</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${rowsHtml}
+              </tbody>
+            </table>
+          </div>
+        </div>`;
+    } else {
+      const caps = [
+        ["View assigned chats", 1, 1, 1, 1], ["View clients & projects", 1, 1, 1, 1],
+        ["View documents", 1, 1, 1, 1], ["Reply when last msg from Admin", 1, 1, 1, 0],
+        ["Reply to any conversation", 1, 1, 0, 0], ["Upload chats / calls / docs", 1, 1, 1, 0],
+        ["Manage clients & projects", 1, 1, 0, 0], ["Manage channels", 1, 1, 0, 0],
+        ["Manage users & roles", 1, 1, 0, 0], ["Create Super Admins", 1, 0, 0, 0],
+        ["System settings", 1, 0, 0, 0],
+      ];
+      const yn = (v) => v ? `<span class="yes">${Icon("check", { size: 13 })}</span>` : `<span class="no">${Icon("x", { size: 13 })}</span>`;
+      matrixHtml = `<div class="card" style="margin:16px 0"><div class="card-h"><h3>Permission matrix</h3></div>
+        <table class="table matrix"><thead><tr><th>Capability</th><th>Super Admin</th><th>Admin</th><th>Team Lead</th><th>Employee</th></tr></thead>
+        <tbody>${caps.map((c) => `<tr><td>${c[0]}</td><td>${yn(c[1])}</td><td>${yn(c[2])}</td><td>${yn(c[3])}</td><td>${yn(c[4])}</td></tr>`).join("")}</tbody></table></div>`;
+    }
 
     document.getElementById("roles-block").innerHTML =
       `<div class="page-head"><div><h2>Users & Roles</h2><p>Role-based access control across the workspace.</p></div></div>
-       <div class="grid g-4" style="margin-bottom:16px">${cards}</div>${matrix}
+       <div class="grid g-4" style="margin-bottom:16px">${cards}</div>${matrixHtml}
        <h3 style="font-family:var(--display);font-size:15px;margin-bottom:12px">Team members</h3>`;
+
+    // Attach card click handlers
+    document.querySelectorAll(".role-card").forEach((card) => {
+      card.addEventListener("click", () => {
+        selectedRole = card.dataset.role;
+        sessionStorage.setItem("selected_role_tab", selectedRole);
+        renderRolesBlock();
+      });
+    });
+
+    if (isSuper) {
+      document.querySelectorAll(".perm-toggle").forEach((el) => {
+        el.addEventListener("change", (e) => {
+          togglePermission(el.dataset.role, el.dataset.code, e.target.checked);
+        });
+      });
+      const resetBtn = document.getElementById("reset-perms-btn");
+      if (resetBtn) {
+        resetBtn.addEventListener("click", resetPermissionsToDefault);
+      }
+    }
   }
 
+  await loadPermissions();
   renderRolesBlock();
   renderRoleFilter();
   await Promise.all([loadStats(), load()]);

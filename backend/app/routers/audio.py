@@ -13,7 +13,7 @@ from app.models.ai_analysis import AIAnalysis, AnalysisTarget
 from app.models.audio import AudioRecording
 from app.models.client import Client
 from app.models.user import User
-from app.rbac import ensure_can_write, ensure_client_access
+from app.rbac import ensure_can_write, ensure_client_access, require_permission
 from app.schemas.ai import AIAnalysisOut
 from app.schemas.file import AudioOut
 from app.services import ai_service, deepgram_service, storage_service
@@ -27,7 +27,7 @@ def list_audio(
     client_id: int,
     archived: bool = False,
     db: Session = Depends(get_db),
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_permission("calls.view")),
 ):
     ensure_client_access(user, _client(db, client_id))
     from app.models.project import Project
@@ -53,11 +53,10 @@ async def upload_audio(
     project_id: int | None = Form(None),
     upload: UploadFile = File(...),
     db: Session = Depends(get_db),
-    actor: User = Depends(get_current_user),
+    actor: User = Depends(require_permission("calls.upload")),
 ):
     client = _client(db, client_id)
     ensure_client_access(actor, client)
-    ensure_can_write(actor)
     
     from app.models.project import Project
     if project_id is None:
@@ -101,7 +100,7 @@ async def upload_audio(
 
 
 @router.get("/{audio_id}/download")
-def download_audio(audio_id: int, request: Request, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+def download_audio(audio_id: int, request: Request, db: Session = Depends(get_db), user: User = Depends(require_permission("calls.view"))):
     rec = db.get(AudioRecording, audio_id)
     if not rec:
         raise HTTPException(status_code=404, detail="Audio not found")
@@ -125,39 +124,36 @@ def download_audio(audio_id: int, request: Request, db: Session = Depends(get_db
 
 
 @router.post("/{audio_id}/archive", status_code=204)
-def archive_audio(audio_id: int, db: Session = Depends(get_db), actor: User = Depends(get_current_user)):
+def archive_audio(audio_id: int, db: Session = Depends(get_db), actor: User = Depends(require_permission("calls.delete"))):
     """Soft-delete: move the recording to the Archive. Reversible via /restore."""
     rec = db.get(AudioRecording, audio_id)
     if not rec:
         raise HTTPException(status_code=404, detail="Audio not found")
     ensure_client_access(actor, _client(db, rec.client_id))
-    ensure_can_write(actor)
     rec.archived_at = datetime.now(timezone.utc)
     db.commit()
     invalidate_cache("calls:", "dashboard:")
 
 
 @router.post("/{audio_id}/restore", status_code=204)
-def restore_audio(audio_id: int, db: Session = Depends(get_db), actor: User = Depends(get_current_user)):
+def restore_audio(audio_id: int, db: Session = Depends(get_db), actor: User = Depends(require_permission("calls.delete"))):
     """Move an archived recording back to the active list."""
     rec = db.get(AudioRecording, audio_id)
     if not rec:
         raise HTTPException(status_code=404, detail="Audio not found")
     ensure_client_access(actor, _client(db, rec.client_id))
-    ensure_can_write(actor)
     rec.archived_at = None
     db.commit()
     invalidate_cache("calls:", "dashboard:")
 
 
 @router.delete("/{audio_id}", status_code=204)
-def delete_audio(audio_id: int, db: Session = Depends(get_db), actor: User = Depends(get_current_user)):
+def delete_audio(audio_id: int, db: Session = Depends(get_db), actor: User = Depends(require_permission("calls.delete"))):
     """Permanent delete: removes the DB row and the file on disk."""
     rec = db.get(AudioRecording, audio_id)
     if not rec:
         raise HTTPException(status_code=404, detail="Audio not found")
     ensure_client_access(actor, _client(db, rec.client_id))
-    ensure_can_write(actor)
     try:
         import os
         path = storage_service.local_path(rec.storage_key)
@@ -171,12 +167,11 @@ def delete_audio(audio_id: int, db: Session = Depends(get_db), actor: User = Dep
 
 
 @router.post("/{audio_id}/analyze", response_model=AIAnalysisOut)
-def analyze_audio(audio_id: int, db: Session = Depends(get_db), actor: User = Depends(get_current_user)):
+def analyze_audio(audio_id: int, db: Session = Depends(get_db), actor: User = Depends(require_permission("ai.analyze"))):
     rec = db.get(AudioRecording, audio_id)
     if not rec:
         raise HTTPException(status_code=404, detail="Audio not found")
     ensure_client_access(actor, _client(db, rec.client_id))
-    ensure_can_write(actor)
 
     try:
         audio_bytes = storage_service.read_bytes(rec.storage_key)
@@ -227,7 +222,7 @@ def analyze_audio(audio_id: int, db: Session = Depends(get_db), actor: User = De
 
 
 @router.get("/{audio_id}/analysis", response_model=AIAnalysisOut | None)
-def latest_audio_analysis(audio_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+def latest_audio_analysis(audio_id: int, db: Session = Depends(get_db), user: User = Depends(require_permission("calls.view"))):
     rec = db.get(AudioRecording, audio_id)
     if not rec:
         raise HTTPException(status_code=404, detail="Audio not found")

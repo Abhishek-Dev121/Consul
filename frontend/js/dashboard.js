@@ -1,6 +1,6 @@
 (async function () {
   await renderLayout("/dashboard", "Dashboard", {
-    crumb: "Overview of everything across clients",
+    // crumb: "Overview of everything across clients",
     hideSearch: true,
     hideActions: true,
   });
@@ -95,7 +95,7 @@
         <div class="sent-head">
           <div>
             <h3>Sentiment overview</h3>
-            <div class="sub">Across all analyzed conversations</div>
+            <div class="sub"></div>
           </div>
           <div class="sent-total"><b>${analyzed}</b> conversation${analyzed === 1 ? "" : "s"} analyzed</div>
         </div>
@@ -116,7 +116,7 @@
         <div class="sent-head" style="margin-bottom:14px">
           <div>
             <h3>Channel volume</h3>
-            <div class="sub">Conversations received per channel</div>
+            <div class="sub"></div>
           </div>
         </div>
         ${d.channel_volume.length ? `<div class="vol-grid">${d.channel_volume.map((v) => `<div class="vol-row">

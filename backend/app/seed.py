@@ -89,3 +89,80 @@ def init_db() -> None:
             ])
             db.commit()
 
+        # Seed default permissions
+        seed_permissions(db)
+
+
+ALL_PERMISSIONS = [
+    ("dashboard.view", "View Dashboard", "Dashboard", "Access the main overview dashboard", [UserRole.super_admin, UserRole.admin, UserRole.team_lead, UserRole.employee]),
+    ("clients.view", "View Clients", "Clients", "View list of clients and details", [UserRole.super_admin, UserRole.admin, UserRole.team_lead, UserRole.employee]),
+    ("clients.create", "Create Clients", "Clients", "Add new clients to the system", [UserRole.super_admin, UserRole.admin]),
+    ("clients.edit", "Edit Clients", "Clients", "Edit existing client details", [UserRole.super_admin, UserRole.admin]),
+    ("clients.delete", "Delete Clients", "Clients", "Archive or delete client records", [UserRole.super_admin, UserRole.admin]),
+    ("conversations.view", "View Conversations", "Conversations", "Access client chat threads", [UserRole.super_admin, UserRole.admin, UserRole.team_lead, UserRole.employee]),
+    ("conversations.reply", "Reply to Conversations", "Conversations", "Send manual messages in chat threads", [UserRole.super_admin, UserRole.admin, UserRole.team_lead]),
+    ("conversations.delete", "Delete Messages", "Conversations", "Delete specific messages from chats", [UserRole.super_admin, UserRole.admin]),
+    ("conversations.clear", "Clear Chat History", "Conversations", "Clear messages inside a conversation", [UserRole.super_admin, UserRole.admin]),
+    ("conversations.clear_all", "Clear All Chats History", "Conversations", "Wipe every message in every conversation", [UserRole.super_admin]),
+    ("messages.send", "Send Messages", "Messages", "Trigger message sending", [UserRole.super_admin, UserRole.admin, UserRole.team_lead]),
+    ("messages.upload", "Upload Attachments", "Messages", "Upload files as attachments in chats", [UserRole.super_admin, UserRole.admin, UserRole.team_lead]),
+    ("messages.edit", "Edit Messages", "Messages", "Edit already sent messages", [UserRole.super_admin, UserRole.admin]),
+    ("channels.view", "View Channels", "Channels", "View platform integration channels", [UserRole.super_admin, UserRole.admin, UserRole.team_lead, UserRole.employee]),
+    ("channels.manage", "Manage Channels", "Channels", "Create or delete integration channels", [UserRole.super_admin, UserRole.admin]),
+    ("projects.view", "View Projects", "Projects", "View projects and project details", [UserRole.super_admin, UserRole.admin, UserRole.team_lead, UserRole.employee]),
+    ("projects.manage", "Manage Projects", "Projects", "Create, edit, or delete projects", [UserRole.super_admin, UserRole.admin]),
+    ("documents.view", "View Documents", "Documents", "Access and download uploaded documents", [UserRole.super_admin, UserRole.admin, UserRole.team_lead, UserRole.employee]),
+    ("documents.upload", "Upload Documents", "Documents", "Upload client or project documents", [UserRole.super_admin, UserRole.admin, UserRole.team_lead]),
+    ("documents.delete", "Delete Documents", "Documents", "Remove/archive documents", [UserRole.super_admin, UserRole.admin]),
+    ("calls.view", "View Call Recordings", "Calls", "Listen to call recordings", [UserRole.super_admin, UserRole.admin, UserRole.team_lead, UserRole.employee]),
+    ("calls.upload", "Upload Recordings", "Calls", "Upload audio calls", [UserRole.super_admin, UserRole.admin, UserRole.team_lead]),
+    ("calls.delete", "Delete Recordings", "Calls", "Delete audio call records", [UserRole.super_admin, UserRole.admin]),
+    ("reports.view", "View Reports", "Reports", "View analytics reports and overview stats", [UserRole.super_admin, UserRole.admin, UserRole.team_lead]),
+    ("ai.analyze", "Run AI Analysis", "AI", "Trigger AI analytics on chats and calls", [UserRole.super_admin, UserRole.admin, UserRole.team_lead]),
+    ("users.view", "View Users", "Users", "View list of team members", [UserRole.super_admin, UserRole.admin, UserRole.team_lead]),
+    ("users.manage", "Manage Users", "Users", "Add, edit, enable/disable, or delete users", [UserRole.super_admin, UserRole.admin]),
+    ("users.permissions", "Edit Permissions", "Users", "Edit role permissions in matrix", [UserRole.super_admin]),
+    ("activity.view", "View Activity Log", "Activity", "Access system audit/activity logs", [UserRole.super_admin, UserRole.admin, UserRole.team_lead]),
+    ("bitrix.manage", "Manage Bitrix", "Bitrix", "Manage Bitrix24 portal connection settings", [UserRole.super_admin, UserRole.admin]),
+]
+
+
+def seed_permissions(db: SessionLocal) -> None:
+    from app.models.permission import Permission, RolePermission
+    from app.cache import invalidate_cache
+
+    # 1. Seed Permission table
+    db_permissions = {p.code: p for p in db.execute(select(Permission)).scalars().all()}
+    for code, name, cat, desc, _ in ALL_PERMISSIONS:
+        if code not in db_permissions:
+            p = Permission(code=code, name=name, category=cat, description=desc)
+            db.add(p)
+    db.flush()
+
+    # Get fresh dict of permissions with IDs
+    db_permissions = {p.code: p for p in db.execute(select(Permission)).scalars().all()}
+
+    # 2. Seed default RolePermissions mapping
+    existing_mapping = db.execute(select(RolePermission.role, RolePermission.permission_id)).all()
+    existing_set = {(role, perm_id) for role, perm_id in existing_mapping}
+
+    for code, _, _, _, roles in ALL_PERMISSIONS:
+        perm = db_permissions[code]
+        for role in roles:
+            if (role, perm.id) not in existing_set:
+                db.add(RolePermission(role=role, permission_id=perm.id))
+
+    db.commit()
+    invalidate_cache("role_permissions:")
+
+
+def sync_permissions(db: SessionLocal) -> None:
+    """Wipe existing RolePermission mappings and restore default mappings (used by reset endpoint)."""
+    from app.models.permission import RolePermission
+    from app.cache import invalidate_cache
+
+    db.execute(text("DELETE FROM role_permissions"))
+    db.flush()
+    seed_permissions(db)
+
+

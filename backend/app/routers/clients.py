@@ -7,7 +7,7 @@ from app.deps import get_current_user
 from app.models.channel import Channel
 from app.models.client import Client
 from app.models.user import User, UserRole
-from app.rbac import ensure_can_write, ensure_client_access, has_min_role
+from app.rbac import ensure_can_write, ensure_client_access, has_min_role, require_permission
 from app.schemas.client import ClientCreate, ClientOut, ClientUpdate
 from app.services.activity_service import log_activity
 
@@ -37,7 +37,7 @@ def _resolve_channels(db: Session, ids: list[int]) -> list[Channel]:
 def list_clients(
     channel_id: int | None = None,
     db: Session = Depends(get_db),
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_permission("clients.view")),
 ):
     from sqlalchemy.orm import selectinload
     stmt = select(Client).options(
@@ -55,7 +55,7 @@ def list_clients(
 
 
 @router.get("/{client_id}", response_model=ClientOut)
-def get_client(client_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+def get_client(client_id: int, db: Session = Depends(get_db), user: User = Depends(require_permission("clients.view"))):
     client = _load(db, client_id)
     ensure_client_access(user, client)
     return client
@@ -63,9 +63,8 @@ def get_client(client_id: int, db: Session = Depends(get_db), user: User = Depen
 
 @router.post("", response_model=ClientOut, status_code=201)
 def create_client(
-    payload: ClientCreate, db: Session = Depends(get_db), actor: User = Depends(get_current_user)
+    payload: ClientCreate, db: Session = Depends(get_db), actor: User = Depends(require_permission("clients.create"))
 ):
-    ensure_can_write(actor)
     # Team leads may create but only admins+ can assign arbitrary members freely;
     # a team lead always gets added to their own client.
     client = Client(
@@ -117,11 +116,10 @@ def update_client(
     client_id: int,
     payload: ClientUpdate,
     db: Session = Depends(get_db),
-    actor: User = Depends(get_current_user),
+    actor: User = Depends(require_permission("clients.edit")),
 ):
     client = _load(db, client_id)
     ensure_client_access(actor, client)
-    ensure_can_write(actor)
     
     old_name = client.name
     
@@ -131,7 +129,8 @@ def update_client(
             setattr(client, field, val)
             
     # Only admins+ may reassign team members.
-    if payload.assignee_ids is not None and has_min_role(actor, UserRole.admin):
+    from app.rbac import has_permission
+    if payload.assignee_ids is not None and has_permission(db, actor, "users.manage"):
         client.assignees = _resolve_assignees(db, payload.assignee_ids)
     if payload.channel_ids is not None:
         client.channels = _resolve_channels(db, payload.channel_ids)
@@ -188,10 +187,8 @@ def update_client(
 def delete_client(
     client_id: int,
     db: Session = Depends(get_db),
-    actor: User = Depends(get_current_user),
+    actor: User = Depends(require_permission("clients.delete")),
 ):
-    if not has_min_role(actor, UserRole.admin):
-        raise HTTPException(status_code=403, detail="Only admins can delete clients")
     client = _load(db, client_id)
     
     # Delete local folder on disk

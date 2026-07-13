@@ -51,6 +51,7 @@ from app.routers import (
     projects,
     realtime,
     users,
+    permissions,
 )
 from app.seed import init_db
 
@@ -100,7 +101,7 @@ async def no_cache(request, call_next):
     return response
 
 # API routers
-for r in (auth, users, channels, clients, conversations, messages, projects, files, audio, ai, activities, bitrix, overview, realtime):
+for r in (auth, users, permissions, channels, clients, conversations, messages, projects, files, audio, ai, activities, bitrix, overview, realtime):
     app.include_router(r.router)
 
 

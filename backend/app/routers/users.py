@@ -11,7 +11,7 @@ from app.deps import get_current_user
 from app.models.activity import Activity
 from app.models.client import Client, client_assignments
 from app.models.user import User, UserRole
-from app.rbac import active_super_admin_count, require_role
+from app.rbac import active_super_admin_count, require_role, require_permission, get_role_permissions
 from app.schemas.auth import (
     BulkAction,
     CreateUserResult,
@@ -73,7 +73,7 @@ def list_users(
     limit: int = Query(20, ge=1, le=200),
     offset: int = Query(0, ge=0),
     db: Session = Depends(get_db),
-    _: User = Depends(require_role(UserRole.team_lead)),
+    _: User = Depends(require_permission("users.view")),
 ):
     stmt = select(User)
     if q:
@@ -96,7 +96,7 @@ def list_users(
 
 
 @router.get("/stats", response_model=UserStats)
-def user_stats(db: Session = Depends(get_db), _: User = Depends(require_role(UserRole.team_lead))):
+def user_stats(db: Session = Depends(get_db), _: User = Depends(require_permission("users.view"))):
     rows = db.execute(select(User.role, User.is_active, User.invite_token)).all()
     by_role: dict[str, int] = {r.value: 0 for r in UserRole}
     active = disabled = pending = 0
@@ -112,7 +112,7 @@ def user_stats(db: Session = Depends(get_db), _: User = Depends(require_role(Use
 
 
 @router.get("/{user_id}", response_model=UserDetailOut)
-def get_user(user_id: int, db: Session = Depends(get_db), _: User = Depends(require_role(UserRole.team_lead))):
+def get_user(user_id: int, db: Session = Depends(get_db), _: User = Depends(require_permission("users.view"))):
     user = db.get(User, user_id)
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
@@ -129,6 +129,7 @@ def get_user(user_id: int, db: Session = Depends(get_db), _: User = Depends(requ
     detail.recent_activity = [
         {"action": a.action, "detail": a.detail, "created_at": a.created_at} for a in acts
     ]
+    detail.permissions = get_role_permissions(db, user.role)
     if user.created_by:
         creator = db.get(User, user.created_by)
         detail.created_by_name = creator.name if creator else None
@@ -140,7 +141,7 @@ def get_user(user_id: int, db: Session = Depends(get_db), _: User = Depends(requ
 def create_user(
     payload: UserCreate,
     db: Session = Depends(get_db),
-    actor: User = Depends(require_role(UserRole.admin)),
+    actor: User = Depends(require_permission("users.manage")),
 ):
     if db.execute(select(User).where(User.email == payload.email)).scalar_one_or_none():
         raise HTTPException(status_code=409, detail="Email already registered")
@@ -180,7 +181,7 @@ def create_user(
 
 
 @router.post("/{user_id}/resend-invite", response_model=CreateUserResult)
-def resend_invite(user_id: int, db: Session = Depends(get_db), actor: User = Depends(require_role(UserRole.admin))):
+def resend_invite(user_id: int, db: Session = Depends(get_db), actor: User = Depends(require_permission("users.manage"))):
     user = db.get(User, user_id)
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
@@ -205,7 +206,7 @@ def update_user(
     user_id: int,
     payload: UserUpdate,
     db: Session = Depends(get_db),
-    actor: User = Depends(require_role(UserRole.admin)),
+    actor: User = Depends(require_permission("users.manage")),
 ):
     user = db.get(User, user_id)
     if not user:
@@ -238,6 +239,11 @@ def update_user(
             raise HTTPException(status_code=400, detail="Password must be at least 8 characters")
         user.password_hash = hash_password(payload.password)
         user.invite_token = None  # setting a password clears any pending invite
+        
+        # Send credentials email to the user (if send_email is not False)
+        if payload.send_email is not False:
+            from app.services.email_service import send_credentials_email
+            send_credentials_email(user.email, user.name, payload.password)
     if payload.role is not None:
         user.role = payload.role
     if payload.is_active is not None:
@@ -248,9 +254,38 @@ def update_user(
     return user
 
 
+from pydantic import BaseModel, Field
+
+class SendCredentialsPayload(BaseModel):
+    password: str = Field(..., min_length=8)
+
+@router.post("/{user_id}/send-credentials")
+def send_user_credentials(
+    user_id: int,
+    payload: SendCredentialsPayload,
+    db: Session = Depends(get_db),
+    actor: User = Depends(require_permission("users.manage")),
+):
+    user = db.get(User, user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    _guard_super_admin_target(actor, user)
+    
+    # Update the password
+    user.password_hash = hash_password(payload.password)
+    user.invite_token = None
+    log_activity(db, action="user.credentials_emailed", actor_id=actor.id, detail={"user_id": user.id})
+    db.commit()
+    
+    # Send credentials email
+    from app.services.email_service import send_credentials_email
+    sent = send_credentials_email(user.email, user.name, payload.password)
+    return {"status": "success", "email_sent": sent}
+
+
 # ---------------------------------------------------------------------- delete
 @router.delete("/{user_id}", status_code=204)
-def delete_user(user_id: int, db: Session = Depends(get_db), actor: User = Depends(require_role(UserRole.admin))):
+def delete_user(user_id: int, db: Session = Depends(get_db), actor: User = Depends(require_permission("users.manage"))):
     user = db.get(User, user_id)
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
@@ -265,7 +300,7 @@ def delete_user(user_id: int, db: Session = Depends(get_db), actor: User = Depen
 
 # ------------------------------------------------------------------ bulk action
 @router.post("/bulk")
-def bulk_action(payload: BulkAction, db: Session = Depends(get_db), actor: User = Depends(require_role(UserRole.admin))):
+def bulk_action(payload: BulkAction, db: Session = Depends(get_db), actor: User = Depends(require_permission("users.manage"))):
     ids = [i for i in payload.user_ids if i != actor.id]  # never act on self in bulk
     users = db.execute(select(User).where(User.id.in_(ids))).scalars().all()
     affected = 0

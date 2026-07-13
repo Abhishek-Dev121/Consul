@@ -22,6 +22,8 @@ class UserOut(ORMModel):
     last_login_at: datetime | None = None
     # Sourced from the model's `is_pending` property (never exposes the raw token).
     is_pending: bool = False
+    permissions: list[str] = []
+
 
 
 class UserCreate(BaseModel):
@@ -40,6 +42,7 @@ class UserUpdate(BaseModel):
     password: str | None = None
     role: UserRole | None = None
     is_active: bool | None = None
+    send_email: bool | None = None
 
 
 class UserListOut(BaseModel):
@@ -100,3 +103,13 @@ class UserDetailOut(UserOut):
     created_by_name: str | None = None
     assigned_clients: list[ClientBrief] = []
     recent_activity: list[ActivityBrief] = []
+
+
+from pydantic import Field
+
+class ForgotPasswordRequest(BaseModel):
+    email: EmailStr
+
+class ResetPasswordRequest(BaseModel):
+    token: str
+    password: str = Field(..., min_length=8)

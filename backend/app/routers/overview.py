@@ -22,7 +22,7 @@ from app.models.conversation import Conversation
 from app.models.file import FileRecord
 from app.models.project import Project, ProjectTask
 from app.models.user import User, UserRole
-from app.rbac import has_min_role
+from app.rbac import has_min_role, require_permission
 
 router = APIRouter(prefix="/api", tags=["overview"])
 
@@ -80,7 +80,7 @@ def _norm_sent(s: str | None) -> str:
 
 
 @router.get("/dashboard/overview")
-def dashboard_overview(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+def dashboard_overview(db: Session = Depends(get_db), user: User = Depends(require_permission("dashboard.view"))):
     cache_key = f"dashboard:{user.id}"
     cached = ttl_cache.get(cache_key)
     if cached is not None:
@@ -245,7 +245,7 @@ def dashboard_overview(db: Session = Depends(get_db), user: User = Depends(get_c
 
 
 @router.get("/overview/clients")
-def clients_overview(archived: bool = False, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+def clients_overview(archived: bool = False, db: Session = Depends(get_db), user: User = Depends(require_permission("clients.view"))):
     cache_key = f"clients:{user.id}:{archived}"
     cached = ttl_cache.get(cache_key)
     if cached is not None:
@@ -322,7 +322,7 @@ def clients_overview(archived: bool = False, db: Session = Depends(get_db), user
 
 
 @router.get("/reports/overview")
-def reports_overview(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+def reports_overview(db: Session = Depends(get_db), user: User = Depends(require_permission("reports.view"))):
     cache_key = f"reports:{user.id}"
     cached = ttl_cache.get(cache_key)
     if cached is not None:
@@ -415,7 +415,7 @@ def reports_overview(db: Session = Depends(get_db), user: User = Depends(get_cur
 
 
 @router.get("/overview/documents")
-def documents_overview(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+def documents_overview(db: Session = Depends(get_db), user: User = Depends(require_permission("documents.view"))):
 
     cache_key = f"documents:{user.id}"
     cached = ttl_cache.get(cache_key)
@@ -461,7 +461,7 @@ def documents_overview(db: Session = Depends(get_db), user: User = Depends(get_c
 
 
 @router.get("/overview/calls")
-def calls_overview(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+def calls_overview(db: Session = Depends(get_db), user: User = Depends(require_permission("calls.view"))):
 
     cache_key = f"calls:{user.id}"
     cached = ttl_cache.get(cache_key)

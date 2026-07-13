@@ -140,6 +140,7 @@ const Api = {
   },
   // Mutating requests invalidate the relevant cache path
   async post(p, b) { const r = await this.request("POST", p, b); _apiCache.del(p); return r; },
+  async put(p, b) { const r = await this.request("PUT", p, b); _apiCache.del(p); return r; },
   async patch(p, b) { const r = await this.request("PATCH", p, b); _apiCache.del(p); return r; },
   async del(p) { const r = await this.request("DELETE", p); _apiCache.del(p); return r; },
 

@@ -3,10 +3,9 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.deps import get_current_user
 from app.models.channel import Channel
-from app.models.user import User, UserRole
-from app.rbac import require_role
+from app.models.user import User
+from app.rbac import require_permission
 from app.schemas.channel import ChannelCreate, ChannelOut
 from app.services.activity_service import log_activity
 
@@ -14,7 +13,7 @@ router = APIRouter(prefix="/api/channels", tags=["channels"])
 
 
 @router.get("", response_model=list[ChannelOut])
-def list_channels(db: Session = Depends(get_db), _: User = Depends(get_current_user)):
+def list_channels(db: Session = Depends(get_db), _: User = Depends(require_permission("channels.view"))):
     return db.execute(select(Channel).order_by(Channel.name)).scalars().all()
 
 
@@ -22,7 +21,7 @@ def list_channels(db: Session = Depends(get_db), _: User = Depends(get_current_u
 def create_channel(
     payload: ChannelCreate,
     db: Session = Depends(get_db),
-    actor: User = Depends(require_role(UserRole.admin)),
+    actor: User = Depends(require_permission("channels.manage")),
 ):
     channel = Channel(
         name=payload.name,
@@ -41,7 +40,7 @@ def create_channel(
 def delete_channel(
     channel_id: int,
     db: Session = Depends(get_db),
-    actor: User = Depends(require_role(UserRole.admin)),
+    actor: User = Depends(require_permission("channels.manage")),
 ):
     channel = db.get(Channel, channel_id)
     if not channel:
