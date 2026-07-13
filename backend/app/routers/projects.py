@@ -20,16 +20,23 @@ def list_projects(
     user: User = Depends(get_current_user),
 ):
     from app.services import bitrix_service
+    from sqlalchemy.orm import selectinload
 
     if client_id:
         client = _client(db, client_id)
         ensure_client_access(user, client)
 
-        stmt = select(Project).where(Project.client_id == client_id)
+        stmt = select(Project).options(
+            selectinload(Project.tasks),
+            selectinload(Project.members)
+        ).where(Project.client_id == client_id)
         return db.execute(stmt).scalars().all()
 
     # Otherwise (global list), return all groups from Bitrix24
-    stmt = select(Project).order_by(Project.created_at.desc())
+    stmt = select(Project).options(
+        selectinload(Project.tasks),
+        selectinload(Project.members)
+    ).order_by(Project.created_at.desc())
     local_projects = db.execute(stmt).scalars().all()
 
     # Filter local projects by client accessibility using a single id set

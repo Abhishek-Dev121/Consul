@@ -261,7 +261,10 @@ def analyze_file(
         from app.services.document_parser_service import extract_url_text
         text = extract_url_text(rec.storage_key)
     else:
-        file_bytes = storage_service.read_bytes(rec.storage_key)
+        try:
+            file_bytes = storage_service.read_bytes(rec.storage_key)
+        except FileNotFoundError:
+            raise HTTPException(status_code=404, detail="File not found in storage. Please upload the file again.")
         from app.services.document_parser_service import extract_text
         text = extract_text(file_bytes, rec.filename, rec.content_type)
         

@@ -16,6 +16,7 @@ class MessageOut(ORMModel):
     attachment_type: str | None = None
     attachment_url: str | None = None
     attachment_name: str | None = None
+    attachment_size: int | None = None   # bytes – used by the download badge
     sent_at: datetime | None
     created_at: datetime
     read: bool = False    # WhatsApp-style: a teammate has seen this outgoing message

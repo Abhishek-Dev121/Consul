@@ -140,7 +140,7 @@ function doRenderLayout(active, pageTitle, user, opts) {
   const search = opts.hideSearch ? "" : `
         <div class="tb-search">
           <span class="s-ico">${Icon("search", { size: 15 })}</span>
-          <input id="tb-search-input" placeholder="Search clients, chats…" autocomplete="off" />
+          <input type="search" id="tb-search-input" name="search" placeholder="Search clients, chats…" autocomplete="new-password" />
           <div class="tb-results d-none" id="tb-results"></div>
         </div>`;
   const topbarEl = document.getElementById("app-topbar");
@@ -425,15 +425,21 @@ function ensureAccountModal() {
           <span class="chip info mt-1 d-inline-block" style="text-transform:capitalize">${u.role.replace("_", " ")}</span></div>
       </div>
       <hr>
-      <h6 style="font-family:var(--display)">Change password</h6>
-      <div class="mb-2"><label class="form-label">Current password</label>
-        <input type="password" class="form-control" id="acc-current" /></div>
-      <div class="mb-1"><label class="form-label">New password</label>
-        <div class="input-group"><input type="password" class="form-control" id="acc-new" />
-          <button class="btn btn-soft" type="button" id="acc-toggle">${Icon("eye", { size: 14 })}</button></div>
-        <div class="pw-meter"><span></span></div></div>
-      <div class="mb-2"><label class="form-label">Confirm new password</label>
-        <input type="password" class="form-control" id="acc-confirm" /></div>
+      <form autocomplete="off" onsubmit="return false;">
+        <!-- Hidden off-screen inputs to capture browser autofill -->
+        <input type="text" name="username" value="${esc(u.email)}" autocomplete="username" style="position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); border: 0;" />
+        <input type="password" name="password" autocomplete="current-password" style="position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); border: 0;" />
+
+        <h6 style="font-family:var(--display)">Change password</h6>
+        <div class="mb-2"><label class="form-label">Current password</label>
+          <input type="password" class="form-control" id="acc-current" autocomplete="current-password" /></div>
+        <div class="mb-1"><label class="form-label">New password</label>
+          <div class="input-group"><input type="password" class="form-control" id="acc-new" autocomplete="new-password" />
+            <button class="btn btn-soft" type="button" id="acc-toggle">${Icon("eye", { size: 14 })}</button></div>
+          <div class="pw-meter"><span></span></div></div>
+        <div class="mb-2"><label class="form-label">Confirm new password</label>
+          <input type="password" class="form-control" id="acc-confirm" autocomplete="new-password" /></div>
+      </form>
     </div>
     <div class="modal-footer"><button class="btn btn-light" data-bs-dismiss="modal">Close</button>
       <button class="btn btn-primary" id="acc-save">Update password</button></div>

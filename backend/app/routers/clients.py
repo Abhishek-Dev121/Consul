@@ -39,7 +39,12 @@ def list_clients(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    clients = db.execute(select(Client).order_by(Client.name)).scalars().all()
+    from sqlalchemy.orm import selectinload
+    stmt = select(Client).options(
+        selectinload(Client.assignees),
+        selectinload(Client.channels)
+    ).order_by(Client.name)
+    clients = db.execute(stmt).scalars().all()
     # Team leads / employees only see clients they're assigned to.
     if not has_min_role(user, UserRole.admin):
         clients = [c for c in clients if any(a.id == user.id for a in c.assignees)]

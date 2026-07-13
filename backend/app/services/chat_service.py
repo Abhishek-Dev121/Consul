@@ -69,12 +69,19 @@ def backfill_client_messages(db: Session, client: Client) -> None:
     conversations = db.execute(
         select(Conversation).where(Conversation.client_id == client.id)
     ).scalars().all()
+    if not conversations:
+        return
+    
+    conv_ids = [c.id for c in conversations]
+    existing_msg_conv_ids = set(db.execute(
+        select(Message.conversation_id)
+        .where(Message.conversation_id.in_(conv_ids))
+        .group_by(Message.conversation_id)
+    ).scalars().all())
+
     cleared_at = client.chat_cleared_at
     for conv in conversations:
-        has_any = db.execute(
-            select(func.count(Message.id)).where(Message.conversation_id == conv.id)
-        ).scalar_one()
-        if has_any:
+        if conv.id in existing_msg_conv_ids:
             continue
         # A cleared chat has zero messages, which would otherwise look like a
         # never-backfilled conversation and get re-exploded on the next read.

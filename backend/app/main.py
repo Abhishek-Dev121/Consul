@@ -60,7 +60,6 @@ FRONTEND_DIR = Path(__file__).resolve().parents[2] / "frontend"
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
-
     # Warm-up: prime the connection pool immediately so the first user request
     # doesn't pay the serverless-Postgres cold-start penalty.
     try:
@@ -70,7 +69,6 @@ async def lifespan(app: FastAPI):
 
     # Single configurable keep-alive (see settings.db_keepalive_seconds).
     task = asyncio.create_task(_db_keepalive()) if settings.db_keepalive_seconds > 0 else None
-
     try:
         yield
     finally:

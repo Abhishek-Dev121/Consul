@@ -323,6 +323,10 @@ def clients_overview(archived: bool = False, db: Session = Depends(get_db), user
 
 @router.get("/reports/overview")
 def reports_overview(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    cache_key = f"reports:{user.id}"
+    cached = ttl_cache.get(cache_key)
+    if cached is not None:
+        return cached
     clients = _accessible_client_meta(db, user)
     cids = [c.id for c in clients] or [-1]
     cname = {c.id: c.name for c in clients}
@@ -401,16 +405,18 @@ def reports_overview(db: Session = Depends(get_db), user: User = Depends(get_cur
     } for c in clients]
     engagement.sort(key=lambda x: -x["chats"])
 
-    return {
+    res = {
         "kpis": {"chats_week": chats_week, "calls_week": calls_week,
                  "avg_response_seconds": avg_resp, "analyzed": len(conv_sent)},
         "weeks": weeks, "team": team, "engagement": engagement,
     }
+    ttl_cache.set(cache_key, res, ttl=30)
+    return res
 
 
 @router.get("/overview/documents")
 def documents_overview(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
-    from app.models.project import Project
+
     cache_key = f"documents:{user.id}"
     cached = ttl_cache.get(cache_key)
     if cached is not None:
@@ -456,7 +462,7 @@ def documents_overview(db: Session = Depends(get_db), user: User = Depends(get_c
 
 @router.get("/overview/calls")
 def calls_overview(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
-    from app.models.project import Project
+
     cache_key = f"calls:{user.id}"
     cached = ttl_cache.get(cache_key)
     if cached is not None:
