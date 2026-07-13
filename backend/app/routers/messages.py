@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from sqlalchemy import delete as sa_delete, select, update as sa_update
 from sqlalchemy.orm import Session
 
+from app.cache import invalidate_cache
 from app.database import get_db
 from app.deps import get_current_user
 from app.models.audio import AudioRecording
@@ -13,6 +14,7 @@ from app.models.client import Client
 from app.models.conversation import Conversation
 from app.models.file import FileRecord
 from app.models.message import Message
+from app.models.read_state import ClientRead
 from app.models.user import User, UserRole
 from app.rbac import ensure_can_write, ensure_client_access, has_min_role
 from app.schemas.message import MessageCreate, MessageEdit, MessageOut
@@ -35,6 +37,20 @@ def _client(db: Session, client_id: int) -> Client:
     if not client:
         raise HTTPException(status_code=404, detail="Client not found")
     return client
+
+
+def _touch_read(db: Session, client_id: int, user_id: int) -> None:
+    """Advance a user's last-read marker to now. Called when they send a message —
+    sending a chat implicitly means they've seen everything up to that point, so
+    their own message never surfaces as unread to them (WhatsApp behaviour)."""
+    now = datetime.now(timezone.utc)
+    row = db.execute(
+        select(ClientRead).where(ClientRead.client_id == client_id, ClientRead.user_id == user_id)
+    ).scalar_one_or_none()
+    if row:
+        row.last_read_at = now
+    else:
+        db.add(ClientRead(client_id=client_id, user_id=user_id, last_read_at=now))
 
 
 def _ensure_conversation(db: Session, client: Client, channel_id: int | None) -> Conversation:
@@ -341,8 +357,12 @@ def send_message(
                              detail={"filename": rec.filename, "is_link": True})
     
     log_activity(db, action="message.sent", actor_id=actor.id, client_id=client.id)
+    _touch_read(db, client.id, actor.id)
     db.commit()
     db.refresh(msg)
+    # The chat list orders by activity and shows unread badges — refresh it so the
+    # sender's chat jumps to the top for everyone on their next poll.
+    invalidate_cache("clients:", "dashboard:")
     msg.mine = True
     return msg
 
@@ -404,8 +424,10 @@ async def send_attachment(
         attachment_type=attach_type, attachment_url=attach_url, attachment_name=filename,
     )
     db.add(msg)
+    _touch_read(db, client.id, actor.id)
     db.commit()
     db.refresh(msg)
+    invalidate_cache("clients:", "dashboard:")
     msg.mine = True
     return msg
 
@@ -445,10 +467,12 @@ def clear_all_chats(db: Session = Depends(get_db), actor: User = Depends(get_cur
 @router.delete("/{client_id}/messages", status_code=200)
 def clear_chat(client_id: int, db: Session = Depends(get_db), actor: User = Depends(get_current_user)):
     """Clear one client's chat: every message goes, for everyone. Attachments stay
-    on disk and remain listed under Documents / Call Recordings."""
+    on disk and remain listed under Documents / Call Recordings. Super Admin only —
+    clearing a conversation is destructive and irreversible."""
+    if actor.role != UserRole.super_admin:
+        raise HTTPException(status_code=403, detail="Only a Super Admin can clear a chat")
     client = _client(db, client_id)
     ensure_client_access(actor, client)
-    ensure_can_write(actor)
     removed = _wipe_messages(db, [client.id])
     log_activity(db, action="chat.cleared", actor_id=actor.id, client_id=client.id,
                  detail={"messages": removed})

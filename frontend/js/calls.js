@@ -76,7 +76,7 @@
         ? `<span class="chip ms-2" style="font-size:10px">${Icon('folder', { size: 11 })} ${esc(c.project_title)}</span>` : "";
       return `<div class="card">
         <div class="call-row">
-          <button class="play" onclick="toast('Open the client profile to play this recording','info')" title="${esc(c.filename)}" aria-label="Play ${esc(c.filename)}">${Icon('send', { size: 14 })}</button>
+          <button class="play" onclick="goToClientConversations(${c.client_id})" title="View in conversations" aria-label="View recording in ${esc(c.client)}'s conversations">${Icon('send', { size: 14 })}</button>
           <div class="rec-meta"><div class="rec-title">${esc(c.client)}${projBadge}</div>
             <div class="rec-file">${esc(c.filename)}</div></div>
           ${wave(c.id)}
@@ -231,6 +231,9 @@
     } catch (e) { toast(e.message); }
   };
 
+  window.goToClientConversations = (clientId) => {
+    window.location.href = `/conversations?client=${clientId}`;
+  };
 
   try {
     calls = await Api.get("/api/overview/calls");

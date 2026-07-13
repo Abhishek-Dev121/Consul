@@ -102,6 +102,16 @@ def link_project(
     client = db.get(Client, payload.client_id)
     if not client:
         raise HTTPException(status_code=404, detail="Client not found")
+    # A client may be linked to at most one project. Re-linking the same group is
+    # fine (it just re-syncs); linking a different one is rejected.
+    existing = db.execute(
+        select(Project).where(Project.client_id == payload.client_id)
+    ).scalars().all()
+    if any(p.bitrix_project_id != str(payload.bitrix_group_id) for p in existing):
+        raise HTTPException(
+            status_code=409,
+            detail="This client is already linked to a project. Unlink the current one before linking another.",
+        )
     try:
         proj = bitrix_service.sync_project_group(db, payload.client_id, payload.bitrix_group_id)
         log_activity(db, action="bitrix.synced", actor_id=actor.id, client_id=payload.client_id,

@@ -152,9 +152,10 @@
       border: 2px solid var(--surface);
     }
     .ci2-body { flex: 1; min-width: 0; }
-    .ci2-row1 { display: flex; justify-content: space-between; align-items: baseline; gap: 6px; }
+    .ci2-row1 { display: flex; justify-content: space-between; align-items: center; gap: 6px; }
     .ci2-row1 .name { font-weight: 600; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .ci2-row1 .tm { font-size: 10px; color: var(--muted-2); font-family: var(--mono); white-space: nowrap; }
+    .unread-badge { display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
     .ci2-prev { font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin: 2px 0 5px; }
     .ci2-foot { display: flex; align-items: center; gap: 6px; }
     .ci2-actions {
@@ -265,6 +266,8 @@
     }
     .th2-id:hover { background: var(--surface-2); }
     .th2-id-txt { min-width: 0; }
+    .th2-id-txt .name-link { cursor: pointer; }
+    .th2-id-txt .name-link:hover { text-decoration: underline; }
     .th2-detail {
       color: var(--muted-2); white-space: nowrap; overflow: hidden;
       text-overflow: ellipsis; max-width: 320px;
@@ -621,27 +624,33 @@
       display: flex;
       align-items: center;
       gap: 10px;
-      background: rgba(0,0,0,.04);
-      border-radius: 8px;
+      width: 244px;
+      max-width: 100%;
+      background: rgba(0,0,0,.045);
+      border: 1px solid rgba(0,0,0,.06);
+      border-radius: 11px;
       padding: 8px 10px;
       text-decoration: none;
       color: inherit;
-      min-width: 200px;
-      transition: background .12s;
+      transition: background .12s, border-color .12s;
     }
-    .att-file:hover { background: rgba(0,0,0,.07); }
+    :root[data-theme="dark"] .att-file { background: rgba(255,255,255,.06); border-color: rgba(255,255,255,.09); }
+    .att-file:hover { background: rgba(0,0,0,.075); }
+    :root[data-theme="dark"] .att-file:hover { background: rgba(255,255,255,.1); }
     .att-file .file-ic {
-      width: 34px; height: 34px;
-      border-radius: 8px;
+      width: 40px; height: 40px;
+      border-radius: 9px;
       background: var(--brand); color: #fff;
       display: grid; place-items: center;
-      flex-shrink: 0;
-      font-size: 11px; font-weight: 700;
+      flex: 0 0 auto;
+      font-size: 10px; font-weight: 800; letter-spacing: .4px;
     }
-    .att-file .file-info { flex: 1; min-width: 0; }
-    .att-file .file-name { font-size: 12.5px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .att-file .file-sub { font-size: 11px; opacity: .6; }
-    .att-file .dl-ic { opacity: .55; }
+    /* Flex column (not block) so the template's whitespace text nodes don't
+       generate phantom line-boxes that balloon the card's height. */
+    .att-file .file-info { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; justify-content: center; gap: 1px; }
+    .att-file .file-name { font-size: 12.5px; font-weight: 600; line-height: 1.3; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .att-file .file-sub { font-size: 11px; opacity: .6; line-height: 1.2; }
+    .att-file .dl-ic { flex: 0 0 auto; opacity: .55; }
 
     /* ── WhatsApp attachment state: Uploading ── */
     .att-uploading {
@@ -964,29 +973,46 @@
     .ai2-metric .l { font-size: 10px; color: var(--muted-2); text-transform: uppercase; letter-spacing: .04em; margin-top: 2px; }
     .ai2-follow { font-size: 12.5px; background: #F0EDFC; border: 1px solid #E0D9F8; color: #4B3B96; padding: 11px 12px; border-radius: 10px; line-height: 1.6; }
 
-    /* AI toggle button (shown when panel is closed) */
+    /* AI toggle (shown when the AI panel is collapsed) — a clear, branded tab. */
     .ai-toggle-btn {
       position: absolute;
       top: 50%;
       right: 0;
       transform: translateY(-50%);
-      width: 26px; height: 56px;
-      background: var(--surface);
-      border: 1px solid var(--line);
-      border-right: none;
-      border-radius: 8px 0 0 8px;
-      display: grid;
-      place-items: center;
+      display: none;                 /* -> flex when .show */
+      flex-direction: column;
+      align-items: center;
+      gap: 5px;
+      width: 42px;
+      padding: 13px 0;
+      background: var(--grad-ai);
+      color: #fff;
+      border: none;
+      border-radius: 14px 0 0 14px;
       cursor: pointer;
-      z-index: 5;
-      color: var(--muted);
-      font-size: 13px;
-      writing-mode: vertical-rl;
-      transition: color .12s, background .12s;
-      display: none;
+      z-index: 6;
+      font-family: var(--display);
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: .5px;
+      box-shadow: -6px 0 20px -6px var(--brand-glow);
+      transition: transform .16s var(--ease), box-shadow .16s var(--ease);
+      animation: ai-toggle-pulse 2.4s ease-in-out infinite;
     }
-    .ai-toggle-btn.show { display: grid; }
-    .ai-toggle-btn:hover { background: var(--brand-soft); color: var(--brand); }
+    .ai-toggle-btn.show { display: flex; }
+    .ai-toggle-btn:hover {
+      transform: translateY(-50%) translateX(-3px);
+      box-shadow: -9px 0 26px -6px var(--brand-glow);
+      animation: none;
+    }
+    .ai-toggle-btn .ait-ic { display: grid; line-height: 0; }
+    .ai-toggle-btn .ait-label { line-height: 1; }
+    /* Gentle attention pulse so the collapsed indicator is discoverable. */
+    @keyframes ai-toggle-pulse {
+      0%, 100% { box-shadow: -6px 0 20px -6px var(--brand-glow); }
+      50%      { box-shadow: -6px 0 26px -3px var(--brand-glow); }
+    }
+    @media (prefers-reduced-motion: reduce) { .ai-toggle-btn { animation: none; } }
 
     /* Empty state for center panel */
     .conv-empty-state {
@@ -1020,6 +1046,16 @@
       font-weight: 500;
     }
     .ch-pill .cd { width: 6px; height: 6px; border-radius: 2px; flex-shrink: 0; }
+
+    /* Hide new conversation button */
+    #new-conv-btn {
+      display: none !important;
+    }
+
+    /* Drag-and-drop visual feedback */
+    #composer-area {
+      transition: background-color 0.15s ease;
+    }
   </style>
 </head>
 <body>
@@ -1068,8 +1104,11 @@
             <div class="th2-body" id="th2-body"></div>
             <div class="composer2" id="composer-area"></div>
           </div>
-          <!-- AI toggle shown when ai-panel is closed -->
-          <button class="ai-toggle-btn" id="ai-toggle-btn" title="Open AI Analysis">AI</button>
+          <!-- AI toggle shown when the AI panel is collapsed -->
+          <button class="ai-toggle-btn" id="ai-toggle-btn" title="Open AI Chat Analysis" aria-label="Open AI Chat Analysis">
+            <span class="ait-ic"><svg width="17" height="17" viewBox="0 0 24 24" fill="currentColor"><path d="M12 3l1.6 4.4L18 9l-4.4 1.6L12 15l-1.6-4.4L6 9l4.4-1.6L12 3Z"/><path d="M19 14l.7 2 2 .7-2 .7-.7 2-.7-2-2-.7 2-.7.7-2Z"/></svg></span>
+            <span class="ait-label">AI</span>
+          </button>
         </div>
 
         <!-- Drag handle right -->

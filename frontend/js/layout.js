@@ -21,6 +21,7 @@ const NAV = [
     { href: "/users", label: "Users & Roles", icon: "shield", min: "team_lead" },
     { href: "/activity", label: "Activity Log", icon: "scroll", min: "team_lead" },
     { href: "/bitrix", label: "Bitrix24", icon: "link", min: "admin" },
+    { href: "/integrations", label: "Integrations", icon: "sparkles", min: "super_admin" },
   ]},
 ];
 
@@ -200,6 +201,9 @@ async function renderLayout(active, pageTitle, opts = {}) {
   // 2. Authenticate and get fresh user details
   const user = await requireAuth();
   cacheUser(user, !!localStorage.getItem("comm_agent_token"));
+
+  // Load custom platform types so channel icons/names render across every page.
+  await loadPlatformTypes();
 
   // 3. Re-render if the user details changed or if we didn't have cache
   if (!cachedUser || cachedUser.name !== user.name || cachedUser.role !== user.role) {

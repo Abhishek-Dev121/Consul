@@ -45,11 +45,23 @@
     <div class="modal-body">
       <label class="form-label">Channel name</label><input class="form-control mb-3" id="ch-name" placeholder="e.g. Acme — WhatsApp" />
       <label class="form-label">Platform type</label>
-      <select class="form-select" id="ch-platform">
-        <option value="whatsapp">WhatsApp</option><option value="upwork">Upwork</option>
-        <option value="slack">Slack</option><option value="email">Email</option>
-        <option value="telegram">Telegram</option><option value="other">Other</option>
-      </select>
+      <select class="form-select" id="ch-platform"><!-- options populated by channels.js --></select>
+
+      <!-- Shown only when "Create New…" is selected -->
+      <div id="new-platform-panel" class="np-panel" hidden>
+        <div class="np-title">New platform type</div>
+        <label class="form-label">Platform name</label>
+        <input class="form-control mb-3" id="np-name" placeholder="e.g. Discord" autocomplete="off" />
+        <label class="form-label">Platform logo <span class="np-req">*</span></label>
+        <div class="np-logo-row">
+          <div class="np-logo-preview" id="np-logo-preview" aria-hidden="true"></div>
+          <div class="np-logo-actions">
+            <button type="button" class="btn btn-soft btn-sm" id="np-logo-btn">Upload logo</button>
+            <input type="file" id="np-logo-input" accept="image/*" hidden />
+            <div class="np-logo-hint">PNG, JPG or SVG · square works best · under 250&nbsp;KB</div>
+          </div>
+        </div>
+      </div>
     </div>
     <div class="modal-footer"><button class="btn btn-light" data-bs-dismiss="modal">Cancel</button>
       <button class="btn btn-primary" id="save-channel">Create channel</button></div>

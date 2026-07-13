@@ -147,6 +147,45 @@ const Api = {
   // (e.g. clearing every chat invalidates every client's message list).
   invalidateCache(prefix = "") { _apiCache.clear(prefix); },
 
+  // Open/download an authenticated file. A plain <a href> or window.open can't
+  // send the bearer token, so the endpoint 401s ("Could not validate
+  // credentials"). We fetch the bytes with the token, then hand the browser a
+  // blob URL — opening it in a new tab (inline preview) or forcing a download.
+  async openFile(path, { download = false, filename = "" } = {}) {
+    _progressStart();
+    try {
+      const headers = {};
+      const token = this.token();
+      if (token) headers["Authorization"] = `Bearer ${token}`;
+      const res = await fetch(path.startsWith("http") ? path : BASE_URL + path, { headers });
+      if (res.status === 401) {
+        Api.clearToken();
+        if (!location.pathname.endsWith("/login")) location.href = "/login";
+        throw new Error("Unauthorized");
+      }
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(typeof data.detail === "string" ? data.detail : `Request failed (${res.status})`);
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      if (download) {
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = filename || "download";
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+      } else {
+        window.open(url, "_blank", "noopener");
+      }
+      // Give the new tab / download a moment to grab the blob before revoking.
+      setTimeout(() => URL.revokeObjectURL(url), 60000);
+    } finally {
+      _progressEnd();
+    }
+  },
+
   async postForm(p, formData) {
     return this.request("POST", p, formData, true);
   },
@@ -206,6 +245,20 @@ const Api = {
     }
   },
 };
+
+// Global safety net: any link to an authenticated file/audio download route (e.g.
+// /api/files/23/download) can't carry the bearer token as a plain navigation, so
+// it would 401 with "Could not validate credentials". Intercept those clicks and
+// stream the bytes through an authenticated fetch instead. Covers every page's
+// download links without each having to opt in.
+document.addEventListener("click", (e) => {
+  const a = e.target.closest && e.target.closest("a[href]");
+  if (!a) return;
+  const href = a.getAttribute("href") || "";
+  if (!/\/api\/(?:files|audio)\/\d+\/download(?:$|[?#])/.test(href)) return;
+  e.preventDefault();
+  Api.openFile(href).catch((err) => { if (window.toast) toast(err.message); });
+}, true);
 
 // Small helpers
 function qs(name) { return new URLSearchParams(location.search).get(name); }

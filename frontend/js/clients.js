@@ -119,7 +119,7 @@
             : '<div class="log-item"><span class="ld"></span><div class="lt muted">No activity yet.</div></div>'}
         </div></div>
         <div class="d-flex gap-2 mt-2">
-          <a class="btn btn-primary flex-fill" href="/chat?id=${c.id}">${Icon("message", { size: 14 })} Conversations</a>
+          <a class="btn btn-primary flex-fill" href="/conversations?client=${c.id}">${Icon("message", { size: 14 })} Conversations</a>
           <a class="btn btn-soft flex-fill" href="/client?id=${c.id}&from=clients">${Icon("users", { size: 14 })} View profile</a>
         </div>
         <div class="d-flex gap-2 mt-2">
@@ -196,33 +196,90 @@
       document.getElementById("c-channel").innerHTML = '<option value="">Select a channel…</option>' +
         channels.map((ch) => `<option value="${ch.id}">${esc(ch.name)} · ${platformName(ch.platform)}</option>`).join("");
 
-      // Inline Channel Creation Toggle
+      // Inline Channel Creation Toggle — mirrors the Channels page: built-in
+      // platforms, any custom types, and a "Create New…" option that reveals a
+      // name + required-logo panel for defining a brand-new platform type.
+      const CREATE_NEW = "__new__";
+      const BUILTINS = ["whatsapp", "upwork", "slack", "email", "telegram"];
       const addChanBtn = document.getElementById("c-add-chan-btn");
       const chanWrap = document.getElementById("c-new-chan-wrap");
       const chanNameInput = document.getElementById("c-new-chan-name");
       const chanPlatSelect = document.getElementById("c-new-chan-platform");
       const cancelChanBtn = document.getElementById("c-new-chan-cancel");
       const saveChanBtn = document.getElementById("c-new-chan-save");
+      const npPanel = document.getElementById("c-np-panel");
+      const npName = document.getElementById("c-np-name");
+      const npLogoBtn = document.getElementById("c-np-logo-btn");
+      const npLogoInput = document.getElementById("c-np-logo-input");
+      const npLogoPreview = document.getElementById("c-np-logo-preview");
+      let npLogo = "";   // data-URL of the picked logo
+
+      function populatePlatformSelect() {
+        const customKeys = Object.keys(CUSTOM_PLATFORMS);
+        let html = BUILTINS.map((p) => `<option value="${p}">${esc(platformName(p))}</option>`).join("");
+        if (customKeys.length) {
+          html += `<optgroup label="Custom">` +
+            customKeys.map((k) => `<option value="${k}">${esc(CUSTOM_PLATFORMS[k].name)}</option>`).join("") +
+            `</optgroup>`;
+        }
+        html += `<option value="${CREATE_NEW}">+ Create New…</option>`;
+        chanPlatSelect.innerHTML = html;
+        toggleNpPanel();
+      }
+      function toggleNpPanel() { npPanel.hidden = chanPlatSelect.value !== CREATE_NEW; }
+      function resetNp() {
+        npLogo = ""; npName.value = ""; npLogoInput.value = "";
+        npLogoPreview.style.backgroundImage = ""; npLogoPreview.classList.add("empty");
+      }
+
+      populatePlatformSelect();
+      chanPlatSelect.addEventListener("change", toggleNpPanel);
+
+      npLogoBtn.onclick = () => npLogoInput.click();
+      npLogoInput.onchange = (e) => {
+        const file = e.target.files && e.target.files[0];
+        if (!file) return;
+        if (!file.type.startsWith("image/")) { toast("Please choose an image file"); e.target.value = ""; return; }
+        if (file.size > 250 * 1024) { toast("Logo is too large — use an image under 250 KB"); e.target.value = ""; return; }
+        const reader = new FileReader();
+        reader.onload = () => {
+          npLogo = reader.result;
+          npLogoPreview.style.backgroundImage = `url("${npLogo}")`;
+          npLogoPreview.classList.remove("empty");
+        };
+        reader.onerror = () => toast("Could not read that image");
+        reader.readAsDataURL(file);
+      };
 
       if (addChanBtn) {
         addChanBtn.onclick = (e) => {
           e.preventDefault();
           chanWrap.classList.toggle("d-none");
-          chanNameInput.focus();
+          if (!chanWrap.classList.contains("d-none")) chanNameInput.focus();
         };
       }
       if (cancelChanBtn) {
         cancelChanBtn.onclick = () => {
           chanWrap.classList.add("d-none");
           chanNameInput.value = "";
+          chanPlatSelect.value = BUILTINS[0];
+          resetNp(); toggleNpPanel();
         };
       }
       if (saveChanBtn) {
         saveChanBtn.onclick = async () => {
           const name = chanNameInput.value.trim();
-          const platform = chanPlatSelect.value;
           if (!name) return toast("Channel Name is required");
+          let platform = chanPlatSelect.value;
           try {
+            if (platform === CREATE_NEW) {
+              const pName = npName.value.trim();
+              if (!pName) return toast("Platform name required");
+              if (!npLogo) return toast("Please upload a logo for the new platform");
+              const created = await Api.post("/api/channels/platform-types", { name: pName, logo: npLogo });
+              CUSTOM_PLATFORMS[created.key] = { name: created.name, logo: created.logo };
+              platform = created.key;
+            }
             const ch = await Api.post("/api/channels", { name, platform, config: {} });
             const opt = document.createElement("option");
             opt.value = ch.id;
@@ -231,6 +288,8 @@
             document.getElementById("c-channel").appendChild(opt);
             chanWrap.classList.add("d-none");
             chanNameInput.value = "";
+            chanPlatSelect.value = BUILTINS[0];
+            resetNp(); populatePlatformSelect();
             toast("Channel created", "success");
           } catch (e) {
             toast(e.message);

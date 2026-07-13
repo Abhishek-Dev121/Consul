@@ -18,6 +18,69 @@
   const platOf = (cl) => (cl.channels && cl.channels[0] && cl.channels[0].platform) || "other";
   const _ns = (s) => (!s ? "neu" : s.toLowerCase().includes("pos") ? "pos" : s.toLowerCase().includes("neg") ? "neg" : "neu");
 
+  // Colour the file-attachment badge by type so a PDF/sheet/doc is recognisable at a glance.
+  function fileIcColor(ext) {
+    const e = (ext || "").toLowerCase();
+    if (e === "pdf") return "#E4483C";
+    if (["doc", "docx"].includes(e)) return "#2B6BEF";
+    if (["xls", "xlsx", "csv"].includes(e)) return "#1E9E5A";
+    if (["ppt", "pptx"].includes(e)) return "#D24726";
+    if (["zip", "rar", "7z"].includes(e)) return "#8B5CF6";
+    if (["txt", "rtf"].includes(e)) return "#64748B";
+    return "var(--brand)";   // links and anything else
+  }
+
+  // ─── Client status (Active / Inactive / Lead) ───
+  const STATUS_OPTS = [
+    { key: "active", label: "Active", cls: "st-active" },
+    { key: "inactive", label: "Inactive", cls: "st-done" },
+    { key: "lead", label: "Lead", cls: "st-hold" },
+  ];
+  const statusMeta = (s) => {
+    const v = (s || "").toLowerCase();
+    return STATUS_OPTS.find((o) => o.key === v)
+      || ((v.includes("inactive") || v.includes("closed") || v.includes("archiv")) ? STATUS_OPTS[1] : STATUS_OPTS[0]);
+  };
+  const canEditStatus = isAdmin();   // Admin + Super Admin
+
+  // Inner markup for the header status control (a pill that opens a dropdown).
+  function statusControlHTML(cl) {
+    const m = statusMeta(cl.status);
+    const items = STATUS_OPTS.map((o) =>
+      `<button type="button" class="cd-status-item ${o.key === m.key ? "on" : ""}" data-status="${o.key}">
+         <span class="st ${o.cls}" style="pointer-events:none"><span class="sd"></span>${o.label}</span>
+         ${o.key === m.key ? Icon("check", { size: 14, style: "margin-left:auto;color:var(--brand)" }) : ""}
+       </button>`).join("");
+    return `<button type="button" class="st ${m.cls} cd-status-btn" id="th2-status-btn" title="Change client status" aria-haspopup="true">
+        <span class="sd"></span>${m.label} ${Icon("chevronDown", { size: 12, style: "margin-left:1px" })}
+      </button>
+      <div class="cd-status-menu" id="th2-status-menu" hidden style="right:0;left:auto">${items}</div>`;
+  }
+
+  function wireStatusControl(cl) {
+    const btn = document.getElementById("th2-status-btn");
+    if (!btn) return;
+    const menu = document.getElementById("th2-status-menu");
+    btn.onclick = (e) => { e.stopPropagation(); menu.hidden = !menu.hidden; };
+    menu.querySelectorAll("[data-status]").forEach((b) =>
+      b.onclick = (e) => { e.stopPropagation(); menu.hidden = true; setClientStatus(cl.id, b.dataset.status); });
+    document.addEventListener("click", () => { if (menu) menu.hidden = true; });
+  }
+
+  async function setClientStatus(id, newStatus) {
+    const cl = clients.find((c) => c.id === id);
+    if (!cl || (cl.status || "").toLowerCase() === newStatus) return;
+    const prev = cl.status;
+    try {
+      await Api.patch(`/api/clients/${id}`, { status: newStatus });
+      cl.status = newStatus;
+      Api.invalidateCache("/api/overview/clients");   // dashboards/lists show status too
+      const wrap = document.getElementById("th2-status");
+      if (wrap) { wrap.innerHTML = statusControlHTML(cl); wireStatusControl(cl); }
+      toast("Client status updated", "success");
+    } catch (e) { cl.status = prev; toast(e.message); }
+  }
+
   // ─── Left panel ───
   function renderArchiveToggle() {
     const btn = document.getElementById("archive-toggle");
@@ -52,8 +115,30 @@
 
   async function load() {
     try {
-      clients = await Api.get(`/api/overview/clients?archived=${view === "archived"}`);
+      // Always fresh: after a send/receive the ordering + unread badges must be
+      // current, not a stale cached copy.
+      Api.invalidateCache("/api/overview/clients");
+      clients = await Api.get(`/api/overview/clients?archived=${view === "archived"}`, { stale: false });
     } catch (e) { toast(e.message); clients = []; }
+    renderList();
+  }
+
+  // Fingerprint of what the list shows: order + unread badge + latest activity.
+  // The background poll only re-renders when this actually changes, so it never
+  // disrupts a click or the search box while nothing new has happened.
+  function clientsSig(list) {
+    return list.map((c) => `${c.id}:${c.unread_count || 0}:${c.last_activity || ""}`).join("|");
+  }
+
+  let listTimer = null;
+  async function refreshList() {
+    let fresh;
+    try {
+      Api.invalidateCache("/api/overview/clients");
+      fresh = await Api.get(`/api/overview/clients?archived=${view === "archived"}`, { stale: false });
+    } catch (_) { return; }
+    if (clientsSig(fresh) === clientsSig(clients)) return;   // nothing moved
+    clients = fresh;
     renderList();
   }
 
@@ -67,10 +152,18 @@
 
   function renderList() {
     const q = searchQ.toLowerCase();
-    const list = clients.filter((cl) =>
+    let list = clients.filter((cl) =>
       (chanFilter === "all" || cl.channels.some((ch) => ch.platform === chanFilter)) &&
       (!q || cl.name.toLowerCase().includes(q) || (cl.company || "").toLowerCase().includes(q))
     );
+    
+    // Sort by last_activity (most recent first), with nulls at the end
+    list.sort((a, b) => {
+      const aTime = a.last_activity ? new Date(a.last_activity).getTime() : 0;
+      const bTime = b.last_activity ? new Date(b.last_activity).getTime() : 0;
+      return bTime - aTime;  // Most recent first
+    });
+    
     const noun = view === "archived" ? "archived client" : "client";
     document.getElementById("cl-sub").textContent = `${clients.length} ${noun}${clients.length === 1 ? "" : "s"}`;
     const scroll = document.getElementById("cl-scroll");
@@ -110,6 +203,9 @@
       const actions = writable
         ? `<button class="ci2-act" data-act="archive" data-id="${cl.id}" title="Archive chat">${Icon("archive", { size: 14 })}</button>`
         : "";
+      const unreadBadge = cl.unread_count && cl.unread_count > 0 
+        ? `<span class="unread-badge" style="background:var(--neg);color:#fff;border-radius:50%;width:24px;height:24px;display:grid;place-items:center;font-size:11px;font-weight:700;flex-shrink:0">${cl.unread_count > 99 ? '99+' : cl.unread_count}</span>`
+        : "";
       return `<div class="ci2 ${cl.id === active ? "on" : ""}" data-id="${cl.id}">
         <span class="av2" style="background:${avHash(cl.name)}">
           ${initialsOf(cl.name)}
@@ -118,6 +214,7 @@
         <div class="ci2-body">
           <div class="ci2-row1">
             <span class="name">${esc(cl.name)}</span>
+            ${unreadBadge}
           </div>
           <div class="ci2-prev">${esc(cl.company || cl.email || "—")}</div>
           <div class="ci2-foot">
@@ -157,7 +254,7 @@
   let threadSig = "";           // signature of the last-rendered message set
 
   // ── Presence + typing + read receipts (team-scoped, light polling) ──
-  function markRead(clientId) { Api.post(`/api/clients/${clientId}/read`).catch(() => {}); }
+  function markRead(clientId) { return Api.post(`/api/clients/${clientId}/read`).catch(() => {}); }
 
   function stopPresence() { if (presenceTimer) { clearInterval(presenceTimer); presenceTimer = null; } }
 
@@ -260,32 +357,43 @@
     const cl = clients.find((x) => x.id === active);
     const plat = platOf(cl);
 
-    // Header — the identity block is a button: clicking it opens Contact info,
-    // the way tapping the name does in WhatsApp.
-    const detail = [cl.company, cl.email, cl.phone].filter(Boolean).map(esc).join(" · ");
+    // Header — the avatar opens the quick Contact info panel; clicking the name
+    // opens the client's full profile page. Only the name and channel show here;
+    // company/email/phone live in the contact panel & full profile.
     document.getElementById("th2-head").innerHTML = `
       <button class="th2-id" id="open-contact" title="Contact info">
         <span class="av2" style="background:${avHash(cl.name)};width:38px;height:38px;font-size:13px;border-radius:50%;display:grid;place-items:center;color:#fff;font-weight:700;flex-shrink:0">
           ${initialsOf(cl.name)}
         </span>
         <span class="th2-id-txt">
-          <span class="name">${esc(cl.name)}</span>
+          <span class="name name-link" title="Open full profile">${esc(cl.name)}</span>
           <span class="meta">
             <span class="ch-pill" style="background:${chanColor(plat)}18;color:${chanColor(plat)}">
               <span class="cd" style="background:${chanColor(plat)}"></span>${platformName(plat)}
             </span>
-            ${detail ? `<span class="th2-detail">${detail}</span>` : ""}
             <span class="online-pill" id="online-pill" style="display:none"><span class="odot"></span><span id="online-txt"></span></span>
           </span>
         </span>
       </button>
       <div class="th2-acts">
-        <a class="icon-btn" href="/client?id=${cl.id}&from=conversations" title="Full profile">
+        ${canEditStatus
+          ? `<div class="cd-status th2-status" id="th2-status">${statusControlHTML(cl)}</div>`
+          : `<span class="st ${statusMeta(cl.status).cls}"><span class="sd"></span>${statusMeta(cl.status).label}</span>`}
+        <a class="icon-btn" href="/client?id=${cl.id}&from=conversations" title="Open full profile" aria-label="Open full profile">
           <svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 3.6-7 8-7s8 3 8 7"/></svg>
         </a>
         <button class="icon-btn" id="chat-menu-btn" title="Chat options" aria-haspopup="true">${Icon("dots", { size: 16 })}</button>
       </div>`;
-    document.getElementById("open-contact").onclick = () => openContactPanel(cl.id);
+    document.getElementById("open-contact").onclick = (e) => {
+      // Clicking the name opens the full Client Profile page; the rest of the
+      // identity block (avatar/channel) opens the quick contact panel.
+      if (e.target.closest(".name-link")) {
+        location.href = `/client?id=${cl.id}&from=conversations`;
+        return;
+      }
+      openContactPanel(cl.id);
+    };
+    if (canEditStatus) wireStatusControl(cl);
     document.getElementById("chat-menu-btn").onclick = (e) => { e.stopPropagation(); openChatMenu(e.currentTarget, cl); };
 
     // Composer — archived conversations are read-only, no composer at all.
@@ -352,6 +460,54 @@
           attFileInput.value = "";
         };
 
+        // Drag-and-drop support
+        const composerArea = document.getElementById("composer-area");
+        const threadBody = document.getElementById("th2-body");
+        
+        // Helper function to handle dropped files
+        const handleDroppedFiles = (files) => {
+          const fileArray = Array.from(files).filter(f => f.type); // Filter out non-file items
+          if (fileArray.length) {
+            pendingAttachments.push(...fileArray);
+            renderAttPreviews();
+          }
+        };
+
+        // Add drag-over and drop listeners to composer area
+        const dragoverHandler = (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          if (composerArea) composerArea.style.backgroundColor = "var(--brand-soft)";
+        };
+
+        const dragleaveHandler = (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          if (composerArea) composerArea.style.backgroundColor = "";
+        };
+
+        const dropHandler = (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          if (composerArea) composerArea.style.backgroundColor = "";
+          if (e.dataTransfer && e.dataTransfer.files) {
+            handleDroppedFiles(e.dataTransfer.files);
+          }
+        };
+
+        // Attach drag-and-drop listeners to composer and thread areas
+        if (composerArea) {
+          composerArea.addEventListener("dragover", dragoverHandler);
+          composerArea.addEventListener("dragleave", dragleaveHandler);
+          composerArea.addEventListener("drop", dropHandler);
+        }
+
+        if (threadBody) {
+          threadBody.addEventListener("dragover", dragoverHandler);
+          threadBody.addEventListener("dragleave", dragleaveHandler);
+          threadBody.addEventListener("drop", dropHandler);
+        }
+
         setupVoiceInput(textarea, autoGrow);
         signalTyping(cl.id, textarea);
       }
@@ -387,6 +543,11 @@
     if (sig === threadSig) return;                   // nothing new
     threadSig = sig;
     paintMessages(msgs, true);
+    // The thread is open and on-screen, so anything that just arrived is "seen" —
+    // advance the read marker so this chat's badge stays cleared, then refresh the
+    // list so ordering + unread badges update (moves this chat to the top).
+    await markRead(clientId);
+    await refreshList();
   }
 
   function paintMessages(msgs, preserveScroll) {
@@ -449,7 +610,7 @@
             hasAtt = true;
             const ext = isExternal ? "LINK" : (m.attachment_name || "file").split(".").pop().toUpperCase().slice(0, 4);
             content = `<a class="att-file" href="${esc(url)}" target="_blank" rel="noopener">
-              <div class="file-ic">${ext}</div>
+              <div class="file-ic" style="background:${fileIcColor(ext)}">${ext}</div>
               <div class="file-info">
                 <div class="file-name">${esc(m.attachment_name || "Download")}</div>
                 <div class="file-sub">${isExternal ? "Open link" : "Download"}</div>
@@ -784,6 +945,13 @@
         }
       }
       await renderThread();   // repaint from the server (replaces the bubbles)
+      // Reload clients to update last_activity and unread_count (moves chat to top)
+      await load();
+      // Re-select the active client to keep it highlighted
+      if (active) {
+        const activeEl = document.querySelector(`#cl-scroll .ci2[data-id="${active}"]`);
+        if (activeEl) activeEl.classList.add("on");
+      }
     } catch (e) {
       toast(e.message);
     } finally {
@@ -846,9 +1014,12 @@
     menu.className = "msg-menu chat-menu"; menu.id = "chat-menu";
     menu.innerHTML =
       `<button data-a="contact">${Icon("users", { size: 14 })} Contact info</button>` +
+      // Clear chat is destructive and Super-Admin-only; Archive stays available to any writable role.
+      (canClearAll && view !== "archived"
+        ? `<button data-a="clear" class="danger">${Icon("eraser", { size: 14 })} Clear chat</button>`
+        : "") +
       (writable && view !== "archived"
-        ? `<button data-a="clear" class="danger">${Icon("eraser", { size: 14 })} Clear chat</button>` +
-          `<button data-a="archive">${Icon("archive", { size: 14 })} Archive chat</button>`
+        ? `<button data-a="archive">${Icon("archive", { size: 14 })} Archive chat</button>`
         : "") +
       (canClearAll
         ? `<div class="menu-sep"></div><button data-a="clearall" class="danger">${Icon("alert", { size: 14 })} Clear all chats</button>`
@@ -983,8 +1154,9 @@
         </div>
         <div class="cp-block cp-actions">
           <a class="cp-act" href="/client?id=${cl.id}&from=conversations">${Icon("users", { size: 15 })} Open full profile</a>
+          ${canClearAll && view !== "archived" ? `
+            <button class="cp-act danger" id="cp-clear">${Icon("eraser", { size: 15 })} Clear chat</button>` : ""}
           ${writable && view !== "archived" ? `
-            <button class="cp-act danger" id="cp-clear">${Icon("eraser", { size: 15 })} Clear chat</button>
             <button class="cp-act" id="cp-archive">${Icon("archive", { size: 15 })} Archive chat</button>` : ""}
         </div>
       </div>`;
@@ -1068,7 +1240,9 @@
   }
 
   // ─── Right panel: AI ───
-  let aiPanelOpen = true;
+  // Collapsed by default — the analysis is opt-in, opened via the "AI" tab.
+  let aiPanelOpen = false;
+  let aiRenderedFor = null;   // client id the AI panel currently reflects
 
   function setAiPanelOpen(open) {
     aiPanelOpen = open;
@@ -1078,6 +1252,8 @@
       panel.classList.remove("collapsed");
       panel.style.width = "";
       toggleBtn.classList.remove("show");
+      // Lazily fetch the analysis the first time it's opened for this client.
+      if (active && aiRenderedFor !== active) renderAI();
     } else {
       panel.classList.add("collapsed");
       toggleBtn.classList.add("show");
@@ -1086,9 +1262,11 @@
 
   document.getElementById("ai-close-btn").addEventListener("click", () => setAiPanelOpen(false));
   document.getElementById("ai-toggle-btn").addEventListener("click", () => setAiPanelOpen(true));
+  setAiPanelOpen(false);   // start collapsed with the "AI" tab showing
 
   async function renderAI() {
     const cl = clients.find((x) => x.id === active);
+    aiRenderedFor = active;   // this panel now reflects the active client
     const scroll = document.getElementById("ai-scroll");
     const modelSub = document.getElementById("ai-model-sub");
     scroll.innerHTML = `<div style="padding:20px 0;text-align:center;color:var(--muted);font-size:12.5px">Loading...</div>`;
@@ -1168,9 +1346,18 @@
     document.getElementById("empty-center").style.display = "none";
     document.getElementById("thread-wrap").style.display = "flex";
     renderThread();
-    renderAI();
+    // Only fetch the AI analysis when the panel is actually open; otherwise defer
+    // it until the user expands the "AI" tab (aiRenderedFor stays out of sync so
+    // setAiPanelOpen(true) triggers the fetch).
+    if (aiPanelOpen) renderAI(); else aiRenderedFor = null;
     // Only active (non-archived) threads get live presence + read receipts.
-    if (view !== "archived") { markRead(id); startPresence(id); }
+    if (view !== "archived") {
+      markRead(id);
+      startPresence(id);
+      // Clear this chat's unread badge immediately rather than waiting for the poll.
+      const c = clients.find((x) => x.id === id);
+      if (c && c.unread_count) { c.unread_count = 0; renderList(); }
+    }
   }
 
   async function archiveClient(id) {
@@ -1181,8 +1368,8 @@
     );
     if (!ok) return;
     try {
-      const convs = await Api.get(`/api/conversations?client_id=${id}`).catch(() => []);
-      for (const cv of convs) await Api.del(`/api/conversations/${cv.id}`);
+      await Api.post(`/api/clients/${id}/archive`);
+      Api.invalidateCache("/api/overview/clients");
       clients = clients.filter((c) => c.id !== id);
       if (active === id) closeThread();
       renderList();
@@ -1193,8 +1380,8 @@
   async function restoreClient(id) {
     const cl = clients.find((c) => c.id === id);
     try {
-      const convs = await Api.get(`/api/conversations?client_id=${id}&is_deleted=true`).catch(() => []);
-      for (const cv of convs) await Api.post(`/api/conversations/${cv.id}/restore`);
+      await Api.post(`/api/clients/${id}/restore`);
+      Api.invalidateCache("/api/overview/clients");
       clients = clients.filter((c) => c.id !== id);  // leaves the archive list
       renderList();
       toast(`${cl ? cl.name + "'s chat" : "Chat"} restored`, "success");
@@ -1204,17 +1391,17 @@
   async function permanentlyDeleteClient(id) {
     const cl = clients.find((c) => c.id === id);
     const ok = await confirmDialog(
-      `This permanently erases ${cl ? cl.name : "this client"}'s archived chat — messages, attachments and analysis. This can't be undone.`,
+      `This permanently erases ${cl ? cl.name : "this client"} — chat, attachments and analysis. This can't be undone.`,
       { title: "Delete permanently?", confirmText: "Delete forever" }
     );
     if (!ok) return;
     try {
-      const convs = await Api.get(`/api/conversations?client_id=${id}&is_deleted=true`).catch(() => []);
-      for (const cv of convs) await Api.del(`/api/conversations/${cv.id}/permanent`);
+      await Api.del(`/api/clients/${id}`);
+      Api.invalidateCache("/api/overview/clients");
       clients = clients.filter((c) => c.id !== id);
       if (active === id) closeThread();
       renderList();
-      toast("Conversation permanently deleted", "success");
+      toast("Client permanently deleted", "success");
     } catch (e) { toast(e.message); }
   }
 
@@ -1313,5 +1500,11 @@
     renderArchiveToggle(); renderFilter(); renderList();
     const first = (preselect && clients.find((c) => c.id === preselect)) ? preselect : (clients[0] && clients[0].id);
     if (first) selectClient(first);
+    // WhatsApp-style live list: poll for new messages / reordering / unread badges
+    // so the list updates without a manual page refresh, even for chats that
+    // aren't currently open. The signature guard keeps it from re-rendering when
+    // nothing has changed. Refresh at once when the tab regains focus.
+    listTimer = setInterval(refreshList, 5000);
+    document.addEventListener("visibilitychange", () => { if (!document.hidden) refreshList(); });
   } catch (e) { toast(e.message); }
 })();
