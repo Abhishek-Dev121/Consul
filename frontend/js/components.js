@@ -63,7 +63,7 @@ function Icon(name, opts = {}) {
 // glyph helper below, which resolves a channel's brand colour from here.
 const CHAN_COLORS = {
   whatsapp: "#25D366", upwork: "#108A00", slack: "#611F69",
-  email: "#4A6CF7", telegram: "#229ED9", other: "#8A94A6",
+  email: "#4A6CF7", telegram: "#229ED9", linkedin: "#0A66C2", other: "#8A94A6",
 };
 const chanColor = (p) => CHAN_COLORS[p] || CHAN_COLORS.other;
 
@@ -75,6 +75,7 @@ const PLATFORM_GLYPHS = {
   telegram: '<path d="M21.9 4.3 2.9 11.6c-.9.3-.9 1-.1 1.3l4.8 1.5 1.8 5.9c.2.5.4.6.9.3l2.7-2 4.9 3.6c.5.3.9.1 1-.5l3.4-16c.2-.7-.3-1-1.3-.7Zm-3.5 3.4-8.5 7.7-.3 3.6-1.4-4.5 9.9-6.5c.4-.3.8.1.3.5Z"/>',
   upwork: '<path d="M17.6 9.2a3.5 3.5 0 0 0-3.3 2.6c-.5-.8-.9-1.8-1.1-2.6h-2v3.1a1.6 1.6 0 0 1-3.2 0V9.2H5.9v3.1a3.6 3.6 0 0 0 6.5 2.1c.4.9 1.2 1.9 2.9 1.9a3.6 3.6 0 1 0 .3-7.1Zm-.1 5.2a1.7 1.7 0 0 1-1.6-1.6l.1-.6c.2-.7.8-1.1 1.5-1.1a1.65 1.65 0 0 1 0 3.3Z"/>',
   email: '<path d="M4 4h16a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2Zm0 2 8 5.5L20 6H4Zm16 2.3-8 5.5-8-5.5V18h16V8.3Z"/>',
+  linkedin: '<path d="M19 0h-14c-2.761 0-5 2.239-5 5v14c0 2.761 2.239 5 5 5h14c2.762 0 5-2.239 5-5v-14c0-2.761-2.238-5-5-5zm-11 19h-3v-11h3v11zm-1.5-12.268c-.966 0-1.75-.779-1.75-1.75s.784-1.75 1.75-1.75 1.75.779 1.75 1.75-.784 1.75-1.75 1.75zm13.5 12.268h-3v-5.604c0-3.368-4-3.113-4 0v5.604h-3v-11h3v1.765c1.396-2.586 7-2.777 7 2.476v6.759z"/>',
   other: '<path d="M10 13a5 5 0 0 0 7 0l2.5-2.5a5 5 0 0 0-7-7L11 5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M14 11a5 5 0 0 0-7 0l-2.5 2.5a5 5 0 0 0 7 7L13 19" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>',
 };
 
@@ -93,12 +94,13 @@ const PLATFORM_META = {
   email:    { icon: channelIcon("email", 16, true),    tint: "tint-sky" },
   upwork:   { icon: channelIcon("upwork", 16, true),   tint: "tint-green" },
   telegram: { icon: channelIcon("telegram", 16, true), tint: "tint-sky" },
+  linkedin: { icon: channelIcon("linkedin", 16, true), tint: "tint-sky" },
   other:    { icon: channelIcon("other", 16, true),    tint: "tint-blue" },
 };
 function platformMeta(p) { return PLATFORM_META[p] || PLATFORM_META.other; }
 
 const platformName = (p) => ({ whatsapp: "WhatsApp", upwork: "Upwork", slack: "Slack",
-  email: "Email", telegram: "Telegram", other: "Other" }[p] || "Other");
+  email: "Email", telegram: "Telegram", linkedin: "LinkedIn", other: "Other" }[p] || "Other");
 
 // Avatar box (colored by string hash) — matches reference .av
 const AV_PALETTE = ["#2E6BFF", "#5B6CE0", "#C2702A", "#9D4ED2", "#1F9D6B", "#D2473D", "#3A8DDE", "#B0467E"];

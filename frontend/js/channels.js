@@ -4,7 +4,7 @@
     <button class="btn btn-primary" id="new-client" data-bs-toggle="modal" data-bs-target="#clientModal">${Icon("plus", { size: 14 })} Client</button>
   </div>`;
 
-  const PLATFORMS = ["whatsapp", "upwork", "slack", "email", "telegram", "other"];
+  const PLATFORMS = ["whatsapp", "upwork", "slack", "email", "telegram", "linkedin", "other"];
   let channels = [], allClients = [], users = [];
   let typeFilter = "all", userFilter = "", searchTerm = "", admin = false;
 

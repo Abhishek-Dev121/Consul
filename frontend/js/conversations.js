@@ -9,7 +9,7 @@
   const tbSearch = document.querySelector(".tb-search");
   if (tbSearch) tbSearch.style.display = "none";
 
-  const FILTERS = ["all", "whatsapp", "upwork", "slack", "email", "telegram"];
+  const FILTERS = ["all", "whatsapp", "upwork", "slack", "email", "telegram", "linkedin"];
   let clients = [], channels = [], active = null, chanFilter = "all", searchQ = "", view = "active";
   const preselect = parseInt(qs("client")) || null;
   const canPurge = isAdmin();

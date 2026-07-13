@@ -13,6 +13,7 @@ class Platform(str, enum.Enum):
     slack = "slack"
     email = "email"
     telegram = "telegram"
+    linkedin = "linkedin"
     other = "other"
 
 

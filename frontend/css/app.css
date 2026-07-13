@@ -42,7 +42,7 @@
 
   /* Channel colours stay true to their platforms */
   --wa: #25D366; --upwork: #108A00; --slack: #611F69; --email: #4A6CF7;
-  --telegram: #229ED9; --other: #8A94A6;
+  --telegram: #229ED9; --linkedin: #0A66C2; --other: #8A94A6;
 
   --r-s: 8px; --r-m: 12px; --r-l: 18px;
   --radius: 18px; --radius-sm: 12px;
@@ -364,6 +364,7 @@ a { color: inherit; }
 .pf-email    { background: color-mix(in srgb, var(--email) 14%, transparent);    color: var(--email);    border-color: transparent; }
 .pf-upwork   { background: color-mix(in srgb, var(--upwork) 14%, transparent);   color: var(--upwork);   border-color: transparent; }
 .pf-telegram { background: color-mix(in srgb, var(--telegram) 14%, transparent); color: var(--telegram); border-color: transparent; }
+.pf-linkedin { background: color-mix(in srgb, var(--linkedin) 14%, transparent); color: var(--linkedin); border-color: transparent; }
 .pf-other    { background: var(--surface-2);                                     color: var(--muted);    border-color: var(--line-2); }
 :root[data-theme="dark"] .pf-slack { color: #B48CD9; }
 

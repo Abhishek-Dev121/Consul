@@ -37,6 +37,7 @@ const ClientEditModal = (function () {
                   <option value="slack">Slack</option>
                   <option value="email">Email</option>
                   <option value="telegram">Telegram</option>
+                  <option value="linkedin">LinkedIn</option>
                   <option value="other">Other</option>
                 </select>
               </div>

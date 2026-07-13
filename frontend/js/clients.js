@@ -3,7 +3,7 @@
   await renderLayout("/clients", "Clients", { crumb: "Manually managed client directory", actions });
   if (!canWrite()) { const b = document.getElementById("new-btn"); if (b) b.remove(); }
 
-  const FILTERS = ["all", "whatsapp", "upwork", "slack", "email", "telegram"];
+  const FILTERS = ["all", "whatsapp", "upwork", "slack", "email", "telegram", "linkedin"];
   let clients = [], chanFilter = "all";
 
   // ---- filter bar ----
