@@ -1006,19 +1006,8 @@ body { transition: background-color .2s ease, color .2s ease; }
 /* ===========================================================================
    Global request progress bar — perceived-speed feedback for every API call
    =========================================================================== */
-#api-progress {
-  position: fixed; top: 0; left: 0; height: 3px; width: 0%;
-  background: linear-gradient(90deg, var(--brand), var(--violet));
-  z-index: 2000; opacity: 0; pointer-events: none;
-  box-shadow: 0 0 8px var(--brand-soft);
-  transition: opacity .2s ease;
-}
-#api-progress.show { opacity: 1; animation: api-progress-grow 1.1s ease-in-out infinite; }
-@keyframes api-progress-grow {
-  0%   { width: 0%;  margin-left: 0; }
-  55%  { width: 62%; }
-  100% { width: 0%;  margin-left: 100%; }
-}
+/* Hidden by request. The JS still creates/toggles it, but it never renders. */
+#api-progress { display: none !important; }
 
 /* ===========================================================================
    Tactile micro-interactions — press feedback, snappier hovers (no new colors)
