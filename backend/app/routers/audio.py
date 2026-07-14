@@ -77,8 +77,8 @@ async def upload_audio(
             prefix = f"{c_dir}/projects/{clean_title}"
 
     data = await upload.read()
-    key = storage_service.save_bytes(data, upload.filename or "audio.mp3", prefix=prefix)
-    
+    key = storage_service.new_key(upload.filename or "audio.mp3", prefix=prefix)
+
     rec = AudioRecording(
         client_id=client_id,
         project_id=project_id,
@@ -86,6 +86,7 @@ async def upload_audio(
         storage_key=key,
         content_type=upload.content_type,
         size=len(data),
+        data=data,   # bytes live in the DB so they survive redeploys
         uploaded_by=actor.id,
     )
     db.add(rec)
@@ -106,13 +107,16 @@ def download_audio(audio_id: int, request: Request, db: Session = Depends(get_db
     if not rec:
         raise HTTPException(status_code=404, detail="Audio not found")
     ensure_client_access(user, _client(db, rec.client_id))
-    try:
-        data = storage_service.read_bytes(rec.storage_key)
-    except storage_service.StoredFileMissing:
-        raise HTTPException(
-            status_code=404,
-            detail="This recording's file is no longer available on the server. It may have been uploaded in a different environment.",
-        )
+    if rec.data is not None:
+        data = rec.data   # bytes stored in the DB
+    else:
+        try:
+            data = storage_service.read_bytes(rec.storage_key)   # legacy disk/S3 file
+        except storage_service.StoredFileMissing:
+            raise HTTPException(
+                status_code=404,
+                detail="This recording's file is no longer available on the server. It may have been uploaded in a different environment.",
+            )
     # Videos are stored as AudioRecording too — derive the real type from the
     # filename so a .mp4 isn't served as audio (which stops it playing).
     return storage_service.range_response(

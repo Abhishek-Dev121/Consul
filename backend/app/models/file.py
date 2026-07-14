@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import BigInteger, DateTime, ForeignKey, String, func
+from sqlalchemy import BigInteger, DateTime, ForeignKey, LargeBinary, String, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import Base
@@ -16,6 +16,9 @@ class FileRecord(Base):
     storage_key: Mapped[str] = mapped_column(String(1024))
     content_type: Mapped[str | None] = mapped_column(String(255))
     size: Mapped[int | None] = mapped_column(BigInteger)
+    # The file bytes, stored in the DB so uploads survive redeploys on ephemeral
+    # disks. Deferred: never loaded by list queries, only when the file is served.
+    data: Mapped[bytes | None] = mapped_column(LargeBinary, deferred=True, default=None)
     uploaded_by: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     # Soft-delete (archive). NULL = active; set = in the Archive, hidden from the

@@ -90,8 +90,8 @@ async def upload_file(
             prefix = f"{c_dir}/projects/{clean_title}"
 
     data = await upload.read()
-    key = storage_service.save_bytes(data, upload.filename or "file", prefix=prefix)
-    
+    key = storage_service.new_key(upload.filename or "file", prefix=prefix)
+
     rec = FileRecord(
         client_id=client_id,
         project_id=project_id,
@@ -99,6 +99,7 @@ async def upload_file(
         storage_key=key,
         content_type=upload.content_type,
         size=len(data),
+        data=data,   # bytes live in the DB so they survive redeploys
         uploaded_by=actor.id,
     )
     db.add(rec)
@@ -165,13 +166,16 @@ def download_file(file_id: int, request: Request, db: Session = Depends(get_db),
     # A "url" record is an external link, not an uploaded file — send the browser there.
     if rec.content_type == "url":
         return RedirectResponse(rec.storage_key)
-    try:
-        data = storage_service.read_bytes(rec.storage_key)
-    except storage_service.StoredFileMissing:
-        raise HTTPException(
-            status_code=404,
-            detail="This file is no longer available on the server. It may have been uploaded in a different environment.",
-        )
+    if rec.data is not None:
+        data = rec.data   # bytes stored in the DB
+    else:
+        try:
+            data = storage_service.read_bytes(rec.storage_key)   # legacy disk/S3 file
+        except storage_service.StoredFileMissing:
+            raise HTTPException(
+                status_code=404,
+                detail="This file is no longer available on the server. It may have been uploaded in a different environment.",
+            )
     ctype = storage_service.guess_content_type(rec.filename, rec.content_type)
     # Preview inline for media/pdf/text (by resolved MIME or extension), else download.
     ext = rec.filename.lower()

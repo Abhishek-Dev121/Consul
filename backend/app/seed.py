@@ -57,6 +57,10 @@ _COLUMN_PATCHES = [
     "ALTER TABLE audio_recordings ADD COLUMN IF NOT EXISTS size INTEGER",
     "CREATE INDEX IF NOT EXISTS ix_messages_client_sent ON messages (client_id, sent_at)",
     "CREATE INDEX IF NOT EXISTS ix_messages_conv_created ON messages (conversation_id, created_at)",
+    # Store uploaded file/audio/video bytes in the DB so they survive redeploys on
+    # ephemeral disks (the previous local-disk storage was lost on restart).
+    "ALTER TABLE files ADD COLUMN IF NOT EXISTS data BYTEA",
+    "ALTER TABLE audio_recordings ADD COLUMN IF NOT EXISTS data BYTEA",
 ]
 
 
