@@ -30,6 +30,16 @@ def client_dir(client) -> str:
     return f"clients/{clean_name}"
 
 
+def new_key(filename: str, prefix: str = "files") -> str:
+    """A unique storage key WITHOUT writing anything — used when the bytes are
+    stored in the DB instead of on disk. Retrieval is by row id, so the key is
+    just a stable, human-readable reference."""
+    import uuid
+    path = Path(filename)
+    stem = re.sub(r"[^a-zA-Z0-9 _-]+", "_", path.stem).strip() or "file"
+    return f"{prefix}/{stem}-{uuid.uuid4().hex[:8]}{path.suffix.lower()}"
+
+
 def save_bytes(data: bytes, filename: str, prefix: str = "files") -> str:
     # Clean the stem to prevent directory traversal or bad chars
     path = Path(filename)

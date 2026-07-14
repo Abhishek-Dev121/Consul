@@ -411,17 +411,17 @@ async def send_attachment(
 
     if is_audio:
         prefix = f"{folder}/projects/{project_folder_name}" if project_id else f"{folder}/audio"
-        key = storage_service.save_bytes(data, filename, prefix=prefix)
+        key = storage_service.new_key(filename, prefix=prefix)
         rec = AudioRecording(client_id=client.id, project_id=project_id, filename=filename, storage_key=key,
-                             content_type=ctype, size=len(data), uploaded_by=actor.id)
+                             content_type=ctype, size=len(data), data=data, uploaded_by=actor.id)
         db.add(rec); db.flush()
         attach_type, attach_url = "audio", f"/api/audio/{rec.id}/download"
         log_activity(db, action="audio.uploaded", actor_id=actor.id, client_id=client.id, detail={"filename": filename})
     else:
         prefix = f"{folder}/projects/{project_folder_name}" if project_id else f"{folder}/documents"
-        key = storage_service.save_bytes(data, filename, prefix=prefix)
+        key = storage_service.new_key(filename, prefix=prefix)
         rec = FileRecord(client_id=client.id, project_id=project_id, filename=filename, storage_key=key,
-                          content_type=ctype, size=len(data), uploaded_by=actor.id)
+                          content_type=ctype, size=len(data), data=data, uploaded_by=actor.id)
         db.add(rec); db.flush()
         attach_type, attach_url = "file", f"/api/files/{rec.id}/download"
         log_activity(db, action="file.uploaded", actor_id=actor.id, client_id=client.id, detail={"filename": filename})
