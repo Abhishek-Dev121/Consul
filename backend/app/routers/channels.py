@@ -7,8 +7,8 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.deps import get_current_user
 from app.models.channel import BUILTIN_PLATFORMS, Channel, PlatformType
-from app.models.user import User, UserRole
-from app.rbac import require_permission, require_role
+from app.models.user import User
+from app.rbac import require_permission
 from app.schemas.channel import (
     ChannelCreate,
     ChannelOut,
@@ -37,7 +37,7 @@ def list_platform_types(db: Session = Depends(get_db), _: User = Depends(get_cur
 def create_platform_type(
     payload: PlatformTypeCreate,
     db: Session = Depends(get_db),
-    actor: User = Depends(require_role(UserRole.admin)),
+    actor: User = Depends(require_permission("channels.manage")),
 ):
     name = payload.name.strip()
     if not name:

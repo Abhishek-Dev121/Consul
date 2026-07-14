@@ -64,14 +64,16 @@ def _aware(dt: datetime) -> datetime:
     return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
 
 
-def backfill_client_messages(db: Session, client: Client) -> None:
-    """Ensure every conversation of the client has been exploded into messages."""
+def backfill_client_messages(db: Session, client: Client) -> bool:
+    """Ensure every conversation of the client has been exploded into messages.
+    Returns True if any messages were inserted, so the caller only commits when
+    there's actually something to persist (this runs on every poll)."""
     conversations = db.execute(
         select(Conversation).where(Conversation.client_id == client.id)
     ).scalars().all()
     if not conversations:
-        return
-    
+        return False
+
     conv_ids = [c.id for c in conversations]
     existing_msg_conv_ids = set(db.execute(
         select(Message.conversation_id)
@@ -80,6 +82,7 @@ def backfill_client_messages(db: Session, client: Client) -> None:
     ).scalars().all())
 
     cleared_at = client.chat_cleared_at
+    inserted = False
     for conv in conversations:
         if conv.id in existing_msg_conv_ids:
             continue
@@ -99,13 +102,25 @@ def backfill_client_messages(db: Session, client: Client) -> None:
                 is_client=msg["is_client"],
                 sent_at=msg["sent_at"],
             ))
-    db.flush()
+            inserted = True
+    if inserted:
+        db.flush()
+    return inserted
 
 
-def list_client_messages(db: Session, client: Client) -> list[Message]:
-    backfill_client_messages(db, client)
-    return db.execute(
-        select(Message)
-        .where(Message.client_id == client.id)
-        .order_by(func.coalesce(Message.sent_at, Message.created_at), Message.id)
+def list_client_messages(
+    db: Session, client: Client, limit: int = 50, before: datetime | None = None
+) -> tuple[list[Message], bool]:
+    """Return up to `limit` messages (chronological) plus whether a backfill wrote
+    anything. Without `before`, returns the latest page; with `before` (a cursor),
+    returns the page immediately older than that timestamp — for scroll-back."""
+    changed = backfill_client_messages(db, client)
+    ts = func.coalesce(Message.sent_at, Message.created_at)
+    q = select(Message).where(Message.client_id == client.id)
+    if before is not None:
+        q = q.where(ts < before)
+    rows = db.execute(
+        q.order_by(ts.desc(), Message.id.desc()).limit(limit)
     ).scalars().all()
+    rows.reverse()   # oldest → newest for display
+    return rows, changed

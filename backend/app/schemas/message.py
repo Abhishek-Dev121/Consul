@@ -5,6 +5,28 @@ from pydantic import BaseModel
 from app.schemas.common import ORMModel
 
 
+class MessageListOut(ORMModel):
+    """Slim shape for the chat feed — only what the UI renders. Drops the
+    client_id / conversation_id / channel_id the frontend never reads."""
+    id: int
+    sender_name: str
+    body: str
+    is_client: bool
+    attachment_type: str | None = None
+    attachment_url: str | None = None
+    attachment_name: str | None = None
+    attachment_size: int | None = None
+    sent_at: datetime | None
+    created_at: datetime
+    read: bool = False
+    mine: bool = False
+    edited: bool = False
+    deleted: bool = False
+    reply_to_id: int | None = None
+    reply_to_sender: str | None = None
+    reply_to_text: str | None = None
+
+
 class MessageOut(ORMModel):
     id: int
     client_id: int

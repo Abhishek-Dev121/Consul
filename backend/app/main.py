@@ -8,7 +8,7 @@ import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import text
@@ -62,6 +62,10 @@ FRONTEND_DIR = Path(__file__).resolve().parents[2] / "frontend"
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
+    # Capture the running loop so sync endpoints can schedule WebSocket broadcasts.
+    import asyncio
+    from app.services.ws_manager import manager as _ws_manager
+    _ws_manager.loop = asyncio.get_running_loop()
     # Warm-up: prime the connection pool immediately so the first user request
     # doesn't pay the serverless-Postgres cold-start penalty.
     try:
@@ -109,6 +113,32 @@ for r in (auth, users, permissions, channels, clients, conversations, messages, 
 @app.get("/api/health", tags=["health"])
 def health():
     return {"status": "ok", "app": settings.app_name}
+
+
+@app.websocket("/api/ws")
+async def ws_events(websocket: WebSocket):
+    """Push channel for live chat updates. Auth via ?token=<jwt>. The server only
+    sends (message/list-change events); the client isn't expected to send. If this
+    fails or isn't supported by the proxy, the frontend falls back to polling."""
+    from fastapi import WebSocketDisconnect
+    from app.services.auth_service import decode_access_token
+    from app.services.ws_manager import manager as ws_manager
+
+    token = websocket.query_params.get("token")
+    payload = decode_access_token(token) if token else None
+    if not payload or "sub" not in payload:
+        await websocket.close(code=1008)   # policy violation
+        return
+    await ws_manager.connect(websocket)
+    try:
+        while True:
+            await websocket.receive_text()   # keeps the socket open; detects disconnect
+    except WebSocketDisconnect:
+        pass
+    except Exception:  # noqa: BLE001
+        pass
+    finally:
+        ws_manager.remove(websocket)
 
 
 # HTML page routes (must be registered before the static mount catch-all)

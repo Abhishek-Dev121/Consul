@@ -253,13 +253,93 @@
   let sending = false;          // guards against double-send (Enter + click)
   let threadSig = "";           // signature of the last-rendered message set
 
+  // Message pagination state (cursor-based scroll-back).
+  const PAGE_LIMIT = 50;
+  const threadCache = {};       // clientId -> last-loaded messages, for instant re-open
+  const pendingDelete = new Set();  // message ids with a delete/hide in flight (guards double-trigger)
+  let sendSeq = 0;              // unique-ish id source for optimistic (unsent) bubbles
+  let loadedMsgs = [];          // full set currently in view (oldest → newest, deduped by id)
+  let hasMoreOlder = false;     // is there an older page to load?
+  let loadingOlder = false;     // guard against concurrent scroll-loads
+
+  // Merge a freshly-fetched page (poll) into the loaded set: updates changed
+  // messages, adds new ones, and keeps older messages already loaded via scroll.
+  function mergeMessages(existing, incoming) {
+    const byId = new Map(existing.map((m) => [m.id, m]));
+    for (const m of incoming) byId.set(m.id, m);
+    const arr = [...byId.values()];
+    arr.sort((a, b) => {
+      const ta = new Date(a.sent_at || a.created_at).getTime();
+      const tb = new Date(b.sent_at || b.created_at).getTime();
+      return ta - tb || a.id - b.id;
+    });
+    return arr;
+  }
+
+  // Fetch the page immediately older than what's loaded and prepend it, keeping
+  // the user's scroll position anchored to the message they were reading.
+  async function loadOlderMessages() {
+    if (!hasMoreOlder || loadingOlder || !loadedMsgs.length || active == null) return;
+    loadingOlder = true;
+    const body = document.getElementById("th2-body");
+    const prevHeight = body ? body.scrollHeight : 0;
+    const cursor = loadedMsgs[0].sent_at || loadedMsgs[0].created_at;
+    try {
+      const older = await Api.get(
+        `/api/clients/${active}/messages?before=${encodeURIComponent(cursor)}&limit=${PAGE_LIMIT}`,
+        { stale: false }
+      );
+      const known = new Set(loadedMsgs.map((m) => m.id));
+      const fresh = older.filter((m) => !known.has(m.id));
+      hasMoreOlder = older.length >= PAGE_LIMIT;
+      if (fresh.length) {
+        loadedMsgs = [...fresh, ...loadedMsgs];
+        threadSig = sigOf(loadedMsgs);
+        paintMessages(loadedMsgs, true);
+        if (body) body.scrollTop = body.scrollHeight - prevHeight;   // anchor position
+      }
+    } catch (_) { /* transient — try again on next scroll */ }
+    finally { loadingOlder = false; }
+  }
+
   // ── Presence + typing + read receipts (team-scoped, light polling) ──
   function markRead(clientId) { return Api.post(`/api/clients/${clientId}/read`).catch(() => {}); }
 
   function stopPresence() { if (presenceTimer) { clearInterval(presenceTimer); presenceTimer = null; } }
 
+  // ── Live push (WebSocket) — additive; polling below is the fallback ──
+  let ws = null, wsConnected = false, wsBackoff = 1000, wsClosed = false;
+  function connectWS() {
+    if (wsClosed) return;
+    const token = Api.token();
+    if (!token) return;
+    try {
+      const base = (typeof BASE_URL !== "undefined" && BASE_URL) ? BASE_URL : location.origin;
+      ws = new WebSocket(base.replace(/^http/i, "ws") + "/api/ws?token=" + encodeURIComponent(token));
+      ws.onopen = () => { wsConnected = true; wsBackoff = 1000; };
+      ws.onmessage = (ev) => {
+        let evt; try { evt = JSON.parse(ev.data); } catch (_) { return; }
+        if (evt && evt.type === "message") {
+          // A new/edited/deleted message somewhere — refresh the open thread if
+          // it's the affected client, and the list ordering/unread for everyone.
+          if (active != null && evt.client_id === active) refreshMessagesIfChanged(active);
+          refreshList();
+        }
+      };
+      ws.onerror = () => { try { ws.close(); } catch (_) {} };
+      ws.onclose = () => {
+        wsConnected = false;
+        if (!wsClosed) { setTimeout(connectWS, wsBackoff); wsBackoff = Math.min(wsBackoff * 2, 30000); }
+      };
+    } catch (_) {
+      wsConnected = false;
+      setTimeout(connectWS, wsBackoff); wsBackoff = Math.min(wsBackoff * 2, 30000);
+    }
+  }
+
   function startPresence(clientId) {
     stopPresence();
+    let tick = 0;
     const poll = async () => {
       if (active !== clientId) { stopPresence(); return; }
       try {
@@ -267,9 +347,9 @@
         updateTyping(p.typing || []);
         updateOnline(p.online_user_ids || []);
       } catch (_) {}
-      // Pull new messages on the same cadence so incoming messages appear
-      // near-instantly instead of only when the thread is re-opened.
-      refreshMessagesIfChanged(clientId);
+      // With WS connected, new messages arrive via push — so the poll only pulls
+      // messages as a slow safety net (~every 15s). Without WS it stays at 3s.
+      if (!wsConnected || (++tick % 5 === 0)) refreshMessagesIfChanged(clientId);
     };
     poll();
     presenceTimer = setInterval(poll, 3000);
@@ -361,7 +441,7 @@
     // opens the client's full profile page. Only the name and channel show here;
     // company/email/phone live in the contact panel & full profile.
     document.getElementById("th2-head").innerHTML = `
-      <button class="th2-id" id="open-contact" title="Contact info">
+      <button class="th2-id" id="open-contact" title="Open full profile">
         <span class="av2" style="background:${avHash(cl.name)};width:38px;height:38px;font-size:13px;border-radius:50%;display:grid;place-items:center;color:#fff;font-weight:700;flex-shrink:0">
           ${initialsOf(cl.name)}
         </span>
@@ -384,14 +464,10 @@
         </a>
         <button class="icon-btn" id="chat-menu-btn" title="Chat options" aria-haspopup="true">${Icon("dots", { size: 16 })}</button>
       </div>`;
-    document.getElementById("open-contact").onclick = (e) => {
-      // Clicking the name opens the full Client Profile page; the rest of the
-      // identity block (avatar/channel) opens the quick contact panel.
-      if (e.target.closest(".name-link")) {
-        location.href = `/client?id=${cl.id}&from=conversations`;
-        return;
-      }
-      openContactPanel(cl.id);
+    document.getElementById("open-contact").onclick = () => {
+      // Clicking anywhere on the identity block (avatar or name) opens the full
+      // Client Profile page.
+      location.href = `/client?id=${cl.id}&from=conversations`;
     };
     if (canEditStatus) wireStatusControl(cl);
     document.getElementById("chat-menu-btn").onclick = (e) => { e.stopPropagation(); openChatMenu(e.currentTarget, cl); };
@@ -514,13 +590,37 @@
       renderReplyBar();  // restore the reply preview if one is active
     }
 
-    // Load messages fresh (never stale) so a send / delete / incoming message
-    // appears at once rather than only after a manual refresh.
+    const targetId = cl.id;
+    loadingOlder = false;
+    const bodyEl = document.getElementById("th2-body");
+
+    // Instant paint: if we've seen this chat before, show its cached messages at
+    // once (correct client, no blank flash), then revalidate below. Otherwise
+    // clear the previous chat's messages so they never linger while loading.
+    const cached = threadCache[targetId];
+    if (cached && cached.length) {
+      loadedMsgs = cached;
+      hasMoreOlder = cached.length >= PAGE_LIMIT;
+      threadSig = sigOf(cached);
+      paintMessages(cached, false);
+    } else {
+      loadedMsgs = [];
+      hasMoreOlder = false;
+      threadSig = "";
+      if (bodyEl) bodyEl.innerHTML = "";
+    }
+
+    // Revalidate against the server. Discard the response if we've since switched
+    // chats, and only repaint when it actually differs from what's shown.
     try {
-      const msgs = await Api.get(`/api/clients/${cl.id}/messages`, { stale: false });
-      threadSig = sigOf(msgs);
-      paintMessages(msgs, false);
-    } catch (e) { toast(e.message); }
+      const msgs = await Api.get(`/api/clients/${targetId}/messages?limit=${PAGE_LIMIT}`, { stale: false });
+      if (active !== targetId) return;   // switched chats mid-fetch — discard
+      threadCache[targetId] = msgs;
+      loadedMsgs = msgs;
+      hasMoreOlder = msgs.length >= PAGE_LIMIT;
+      const sig = sigOf(msgs);
+      if (sig !== threadSig) { threadSig = sig; paintMessages(msgs, true); }
+    } catch (e) { if (active === targetId && !(cached && cached.length)) toast(e.message); }
   }
 
   // A lightweight fingerprint of the message set — id + read/edited/deleted flags.
@@ -535,14 +635,18 @@
   async function refreshMessagesIfChanged(clientId) {
     if (active !== clientId || view === "archived" || sending) return;
     if (document.querySelector(".bubble2.editing") || document.getElementById("msg-menu") || selectMode) return;
-    let msgs;
-    try { msgs = await Api.get(`/api/clients/${clientId}/messages`, { stale: false }); }
+    let latest;
+    try { latest = await Api.get(`/api/clients/${clientId}/messages?limit=${PAGE_LIMIT}`, { stale: false }); }
     catch (_) { return; }
     if (active !== clientId) return;                 // client switched mid-fetch
-    const sig = sigOf(msgs);
+    // Merge the latest page into what's loaded so scroll-back history is preserved.
+    const merged = mergeMessages(loadedMsgs, latest);
+    const sig = sigOf(merged);
     if (sig === threadSig) return;                   // nothing new
     threadSig = sig;
-    paintMessages(msgs, true);
+    loadedMsgs = merged;
+    threadCache[clientId] = merged;   // keep the cache warm for instant re-open
+    paintMessages(loadedMsgs, true);
     // The thread is open and on-screen, so anything that just arrived is "seen" —
     // advance the read marker so this chat's badge stays cleared, then refresh the
     // list so ordering + unread badges update (moves this chat to the top).
@@ -658,26 +762,7 @@
         // Delegated image click → WhatsApp-style lightbox (no inline onclick = no XSS).
         body.querySelectorAll(".att-img").forEach((img) =>
           img.addEventListener("click", () => openLightbox(img.dataset.url)));
-        // ── Download badge: click → brief spinner → mark downloaded → re-render ──
-        body.querySelectorAll(".att-dl-badge").forEach((badge) => {
-          badge.addEventListener("click", async () => {
-            const msgId = badge.dataset.dlId;
-            const dlUrl  = badge.dataset.dlUrl;
-            const dlType = badge.dataset.dlType; // file | audio | video
-            if (!msgId || !dlUrl) return;
 
-            // Show spinner inside the circle
-            const circle = badge.querySelector(".dl-circle");
-            if (circle) circle.innerHTML = `<span class="spinner-border spinner-border-sm" style="color:#fff;width:18px;height:18px;"></span>`;
-            badge.style.pointerEvents = "none";
-
-            // Tiny delay (UX feedback), then mark as downloaded and re-render
-            await new Promise((r) => setTimeout(r, 600));
-            setDownloaded(msgId);
-            await renderThread();
-          });
-        });
-      }
     }
   }
 
@@ -878,19 +963,54 @@
   }
 
   async function deleteChatMessage(id) {
+    if (pendingDelete.has(id)) return;   // already being deleted/hidden — ignore
     const ok = await confirmDialog(
       "This removes the message for everyone in this conversation. This can't be undone.",
       { title: "Delete for everyone?", confirmText: "Delete for everyone" }
     );
-    if (!ok) return;
-    try { await Api.del(`/api/clients/${active}/messages/${id}`); await renderThread(); toast("Message deleted for everyone", "success"); }
-    catch (e) { toast(e.message); }
+    if (!ok || pendingDelete.has(id)) return;
+    const clientId = active;
+    pendingDelete.add(id);
+    // Optimistic: show the "deleted" placeholder at once so the message can't be
+    // re-actioned while the request is in flight.
+    if (active === clientId) {
+      const m = loadedMsgs.find((x) => x.id === id);
+      if (m) {
+        m.deleted = true; m.body = "";
+        m.attachment_type = m.attachment_url = m.attachment_name = null;
+        threadSig = sigOf(loadedMsgs); threadCache[clientId] = loadedMsgs;
+        paintMessages(loadedMsgs, true);
+      }
+    }
+    try {
+      await Api.del(`/api/clients/${clientId}/messages/${id}`);
+      if (active === clientId) toast("Message deleted for everyone", "success");
+    } catch (e) {
+      toast(e.message);
+      if (active === clientId) await renderThread();   // revert optimistic change
+    } finally { pendingDelete.delete(id); }
   }
 
   async function hideChatMessage(id) {
     // "Delete for me" — hides only from the current user's view.
-    try { await Api.post(`/api/clients/${active}/messages/${id}/hide`); await renderThread(); toast("Message deleted for you", "success"); }
-    catch (e) { toast(e.message); }
+    if (pendingDelete.has(id)) return;
+    const clientId = active;
+    pendingDelete.add(id);
+    // Optimistic: remove from view immediately.
+    let reverted = null;
+    if (active === clientId) {
+      reverted = loadedMsgs;
+      loadedMsgs = loadedMsgs.filter((x) => x.id !== id);
+      threadSig = sigOf(loadedMsgs); threadCache[clientId] = loadedMsgs;
+      paintMessages(loadedMsgs, true);
+    }
+    try {
+      await Api.post(`/api/clients/${clientId}/messages/${id}/hide`);
+      if (active === clientId) toast("Message deleted for you", "success");
+    } catch (e) {
+      toast(e.message);
+      if (active === clientId && reverted) { loadedMsgs = reverted; await renderThread(); }
+    } finally { pendingDelete.delete(id); }
   }
 
   function renderAttPreviews() {
@@ -936,20 +1056,56 @@
     const cl = clients.find((x) => x.id === active);
     if (!cl) return;
 
+    const clientId = cl.id;
     sending = true;
     const sendBtn = document.getElementById("send-btn");
     if (sendBtn) sendBtn.disabled = true;
     // Take ownership of the queue immediately so a second trigger sees nothing.
     pendingAttachments = [];
 
+    // Append the just-created message straight into the thread — the POST/upload
+    // returns it, so no full re-fetch is needed and it appears instantly.
+    const appendCreated = (created) => {
+      if (active !== clientId || !created || !created.id) return;
+      loadedMsgs = mergeMessages(loadedMsgs, [created]);
+      threadSig = sigOf(loadedMsgs);
+      threadCache[clientId] = loadedMsgs;
+      paintMessages(loadedMsgs, false);   // scroll to bottom
+    };
+
     try {
       // Send text first (carrying the quoted-reply target, if any).
       if (text) {
-        await Api.post(`/api/clients/${cl.id}/messages`, { body: text, reply_to_id: replyingTo ? replyingTo.id : null });
-        ta.value = "";
-        ta.style.height = "auto";
-        clearReply();
-
+        const replyId = replyingTo ? replyingTo.id : null;
+        // Show the bubble INSTANTLY (before the network call), then reconcile.
+        const tempId = 2000000000 + (sendSeq++);
+        const now = new Date().toISOString();
+        const optimistic = {
+          id: tempId, sender_name: (typeof CURRENT_USER !== "undefined" && CURRENT_USER && CURRENT_USER.name) || "You",
+          body: text, is_client: false, sent_at: now, created_at: now,
+          mine: true, read: false, edited: false, deleted: false,
+          reply_to_sender: replyingTo ? replyingTo.sender : null,
+          reply_to_text: replyingTo ? replyingTo.snippet : null,
+        };
+        ta.value = ""; ta.style.height = "auto"; clearReply();
+        if (active === clientId) {
+          loadedMsgs = mergeMessages(loadedMsgs, [optimistic]);
+          threadSig = sigOf(loadedMsgs);
+          paintMessages(loadedMsgs, false);   // appears immediately, scrolled to bottom
+        }
+        // Confirm with the server, then swap the temp bubble for the real message.
+        try {
+          const created = await Api.post(`/api/clients/${clientId}/messages`, { body: text, reply_to_id: replyId });
+          if (active === clientId && created && created.id) {
+            loadedMsgs = mergeMessages(loadedMsgs.filter((m) => m.id !== tempId), [created]);
+            threadSig = sigOf(loadedMsgs); threadCache[clientId] = loadedMsgs;
+            paintMessages(loadedMsgs, true);
+          }
+        } catch (e) {
+          toast("Message failed: " + e.message);
+          if (active === clientId) { loadedMsgs = loadedMsgs.filter((m) => m.id !== tempId); paintMessages(loadedMsgs, true); }
+          ta.value = text;   // restore so the user can retry
+        }
       }
       renderAttPreviews();   // clear the composer preview strip
 
@@ -957,21 +1113,14 @@
       for (const file of files) {
         const bubble = addUploadingBubble(file);
         try {
-          await Api.uploadForm(`/api/clients/${cl.id}/messages/upload`, uploadBody(file),
+          const created = await Api.uploadForm(`/api/clients/${clientId}/messages/upload`, uploadBody(file),
             (frac) => setUploadProgress(bubble, frac));
           setUploadProgress(bubble, 1);
+          appendCreated(created);   // replaces the uploading bubble on repaint
         } catch (e) {
           markUploadFailed(bubble, file.name);
           toast("Could not upload " + file.name + ": " + e.message);
         }
-      }
-      await renderThread();   // repaint from the server (replaces the bubbles)
-      // Reload clients to update last_activity and unread_count (moves chat to top)
-      await load();
-      // Re-select the active client to keep it highlighted
-      if (active) {
-        const activeEl = document.querySelector(`#cl-scroll .ci2[data-id="${active}"]`);
-        if (activeEl) activeEl.classList.add("on");
       }
     } catch (e) {
       toast(e.message);
@@ -980,6 +1129,11 @@
       const b = document.getElementById("send-btn");
       if (b) b.disabled = false;
     }
+
+    // Reconcile in the background — never block the composer on these. The list
+    // reorder/unread and read-receipt state catch up without holding up the send.
+    refreshList();
+    if (active === clientId) refreshMessagesIfChanged(clientId);
   }
 
   function uploadBody(file) { const fd = new FormData(); fd.append("upload", file); return fd; }
@@ -1264,6 +1418,51 @@
   // Collapsed by default — the analysis is opt-in, opened via the "AI" tab.
   let aiPanelOpen = false;
   let aiRenderedFor = null;   // client id the AI panel currently reflects
+  let aiConvId = null;        // conversation the AI panel is reading
+  // Report time filter: "latest" (newest overall) or daily/weekly/monthly + a
+  // picker value, so users can browse historical AI Chat Analysis reports.
+  let aiFilter = { mode: "latest", value: "" };
+
+  // Turn the current filter into a [start, end) instant range (or null = latest).
+  function aiFilterRange() {
+    const f = aiFilter;
+    if (f.mode === "latest" || !f.value) return null;
+    if (f.mode === "daily") {
+      const s = new Date(f.value + "T00:00:00");
+      const e = new Date(s); e.setDate(s.getDate() + 1);
+      return [s, e];
+    }
+    if (f.mode === "monthly") {
+      const [y, mo] = f.value.split("-").map(Number);
+      return [new Date(y, mo - 1, 1), new Date(y, mo, 1)];
+    }
+    if (f.mode === "weekly") {
+      const [y, w] = f.value.split("-W").map(Number);   // e.g. "2026-W29"
+      const jan4 = new Date(y, 0, 4);
+      const wk1Mon = new Date(jan4); wk1Mon.setDate(jan4.getDate() - ((jan4.getDay() + 6) % 7));
+      const s = new Date(wk1Mon); s.setDate(wk1Mon.getDate() + (w - 1) * 7);
+      const e = new Date(s); e.setDate(s.getDate() + 7);
+      return [s, e];
+    }
+    return null;
+  }
+
+  // Default picker value for a mode (today / this week / this month).
+  function aiDefaultValue(mode) {
+    const d = new Date();
+    const p2 = (n) => String(n).padStart(2, "0");
+    if (mode === "daily") return `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())}`;
+    if (mode === "monthly") return `${d.getFullYear()}-${p2(d.getMonth() + 1)}`;
+    if (mode === "weekly") {
+      // ISO week number for today.
+      const t = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
+      const day = (t.getUTCDay() + 6) % 7; t.setUTCDate(t.getUTCDate() - day + 3);
+      const firstThu = new Date(Date.UTC(t.getUTCFullYear(), 0, 4));
+      const wk = 1 + Math.round(((t - firstThu) / 86400000 - 3 + ((firstThu.getUTCDay() + 6) % 7)) / 7);
+      return `${t.getUTCFullYear()}-W${p2(wk)}`;
+    }
+    return "";
+  }
 
   function setAiPanelOpen(open) {
     aiPanelOpen = open;
@@ -1289,12 +1488,12 @@
     const cl = clients.find((x) => x.id === active);
     aiRenderedFor = active;   // this panel now reflects the active client
     const scroll = document.getElementById("ai-scroll");
-    const modelSub = document.getElementById("ai-model-sub");
     scroll.innerHTML = `<div style="padding:20px 0;text-align:center;color:var(--muted);font-size:12.5px">Loading...</div>`;
 
     let convs = [];
     try { convs = await Api.get(`/api/conversations?client_id=${cl.id}&is_deleted=${view === "archived"}`); } catch (_) {}
     if (!convs.length) {
+      aiConvId = null;
       scroll.innerHTML = `<div class="ai2-empty">
         <div class="ai-icon-wrap">${Icon("sparkles", { size: 24 })}</div>
         <h4>No analysis yet</h4>
@@ -1302,26 +1501,81 @@
       </div>`;
       return;
     }
-    const convId = convs[0].id;
+    aiConvId = convs[0].id;
+    aiFilter = { mode: "latest", value: "" };   // reset filter when switching client
+
+    // Filter bar (period + date/week/month picker) stays fixed; the report body
+    // below reloads whenever the filter changes.
+    const modes = [["latest", "Latest"], ["daily", "Daily"], ["weekly", "Weekly"], ["monthly", "Monthly"]];
+    scroll.innerHTML = `
+      <div class="ai-filter">
+        <div class="ai-fseg" id="ai-fseg">
+          ${modes.map(([m, l]) => `<button type="button" data-mode="${m}" class="${m === "latest" ? "on" : ""}">${l}</button>`).join("")}
+        </div>
+        <input type="date" id="ai-fdate" class="form-control form-control-sm" hidden />
+      </div>
+      <div id="ai-report"><div style="padding:20px 0;text-align:center;color:var(--muted);font-size:12.5px">Loading...</div></div>`;
+
+    const seg = document.getElementById("ai-fseg");
+    const dateInput = document.getElementById("ai-fdate");
+    seg.querySelectorAll("[data-mode]").forEach((b) => b.onclick = () => {
+      aiFilter.mode = b.dataset.mode;
+      seg.querySelectorAll("[data-mode]").forEach((x) => x.classList.toggle("on", x === b));
+      if (aiFilter.mode === "latest") {
+        dateInput.hidden = true;
+      } else {
+        dateInput.type = aiFilter.mode === "daily" ? "date" : aiFilter.mode === "weekly" ? "week" : "month";
+        aiFilter.value = aiDefaultValue(aiFilter.mode);
+        dateInput.value = aiFilter.value;
+        dateInput.hidden = false;
+      }
+      loadAiReport();
+    });
+    dateInput.onchange = () => { aiFilter.value = dateInput.value; loadAiReport(); };
+
+    await loadAiReport();
+  }
+
+  // Fetch + render the report body for the current conversation and filter.
+  async function loadAiReport() {
+    const report = document.getElementById("ai-report");
+    if (!report || !aiConvId) return;
+    const modelSub = document.getElementById("ai-model-sub");
+    report.innerHTML = `<div style="padding:20px 0;text-align:center;color:var(--muted);font-size:12.5px">Loading...</div>`;
+
+    const range = aiFilterRange();
+    let url = `/api/ai/conversations/${aiConvId}/analysis`;
+    if (range) url += `?start=${encodeURIComponent(range[0].toISOString())}&end=${encodeURIComponent(range[1].toISOString())}`;
+
     let a = null;
-    try { a = await Api.get(`/api/ai/conversations/${convId}/analysis`); } catch (_) {}
+    try { a = await Api.get(url, { stale: false }); } catch (_) {}
+
     if (!a) {
-      scroll.innerHTML = `<div class="ai2-empty">
+      // No report for this window — distinguish "never analysed" from "none in range".
+      const periodLabel = aiFilter.mode === "latest" ? "" :
+        aiFilter.mode === "daily" ? " for this day" :
+        aiFilter.mode === "weekly" ? " for this week" : " for this month";
+      report.innerHTML = `<div class="ai2-empty">
         <div class="ai-icon-wrap">${Icon("sparkles", { size: 24 })}</div>
-        <h4>Not analyzed yet</h4>
-        <p>Run AI analysis on this client's latest conversation.</p>
-        ${writable ? `<button class="btn btn-primary btn-sm" id="run-ai" style="margin:0 auto">Run AI analysis</button>` : ""}
+        <h4>${aiFilter.mode === "latest" ? "Not analyzed yet" : "No report" + periodLabel}</h4>
+        <p>${aiFilter.mode === "latest"
+          ? "Run AI analysis on this client's latest conversation."
+          : "There's no AI Chat Analysis in the selected period. Pick another, or view the latest."}</p>
+        ${(aiFilter.mode === "latest" && writable) ? `<button class="btn btn-primary btn-sm" id="run-ai" style="margin:0 auto">Run AI analysis</button>` : ""}
       </div>`;
-      const r = document.getElementById("run-ai"); if (r) r.onclick = () => runAI(convId);
+      const r = document.getElementById("run-ai"); if (r) r.onclick = () => runAI(aiConvId);
       return;
     }
+
     const m = a.response_metrics || {};
     if (a.model) modelSub.textContent = `${a.model} · summary & sentiment`;
-    scroll.innerHTML = `
+    const when = a.created_at ? new Date(a.created_at).toLocaleString([], { dateStyle: "medium", timeStyle: "short" }) : "";
+    report.innerHTML = `
       <div style="display:flex;justify-content:space-between;align-items:center">
         ${sentPill(_ns(a.sentiment))}
         ${writable ? `<button class="btn btn-soft btn-sm" id="run-ai">Re-run analysis</button>` : ""}
       </div>
+      ${when ? `<div class="ai-report-when">Report generated ${esc(when)}</div>` : ""}
       <div class="ai2-block">
         <div class="lab"><span class="lab-dot"></span> Summary</div>
         <div class="ai2-sum">${esc(a.summary || "—")}</div>
@@ -1345,7 +1599,7 @@
         <div class="lab"><span class="lab-dot purple"></span> Follow-up</div>
         <div class="ai2-follow">${a.follow_ups.map(esc).join(" ")}</div>
       </div>` : ""}`;
-    const r = document.getElementById("run-ai"); if (r) r.onclick = () => runAI(convId);
+    const r = document.getElementById("run-ai"); if (r) r.onclick = () => runAI(aiConvId);
   }
 
   async function runAI(convId) {
@@ -1489,6 +1743,11 @@
   makeDraggable("drag-left", "conv-left", "left");
   makeDraggable("drag-right", "conv-right", "right");
 
+  // Infinite scroll-back: near the top of the thread, pull the next older page.
+  document.getElementById("th2-body").addEventListener("scroll", (e) => {
+    if (e.target.scrollTop < 80) loadOlderMessages();
+  });
+
   // In select mode, clicking a message toggles its selection (capture phase so it
   // preempts the image-lightbox / other click handlers).
   document.getElementById("th2-body").addEventListener("click", (e) => {
@@ -1509,7 +1768,6 @@
     renderList();
   });
 
-  // ─── Init ───
   async function init() {
     const scroll = document.getElementById("cl-scroll");
     if (scroll) {
@@ -1529,8 +1787,13 @@
       renderArchiveToggle(); renderFilter(); renderList();
       const first = (preselect && clients.find((c) => c.id === preselect)) ? preselect : (clients[0] && clients[0].id);
       if (first) selectClient(first);
+      // Open the live-push socket (falls back to polling if it can't connect).
+      connectWS();
+      // WhatsApp-style live list: poll for new messages / reordering / unread badges.
+      // When WS is connected this is just a slow safety net (~20s); without it, 5s.
       if (listTimer) clearInterval(listTimer);
-      listTimer = setInterval(refreshList, 5000);
+      let listTick = 0;
+      listTimer = setInterval(() => { if (!wsConnected || (++listTick % 4 === 0)) refreshList(); }, 5000);
     } catch (e) {
       toast(e.message);
       if (scroll) {

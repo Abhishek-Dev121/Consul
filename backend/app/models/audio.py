@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import DateTime, Float, ForeignKey, String, func
+from sqlalchemy import DateTime, Float, ForeignKey, Integer, String, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import Base
@@ -16,6 +16,7 @@ class AudioRecording(Base):
     storage_key: Mapped[str] = mapped_column(String(1024))
     content_type: Mapped[str | None] = mapped_column(String(255))
     duration: Mapped[float | None] = mapped_column(Float)
+    size: Mapped[int | None] = mapped_column(Integer)   # bytes, captured at upload (avoids a disk stat on every read)
     uploaded_by: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     # Soft-delete (archive). NULL = active; set = in the Archive.

@@ -17,8 +17,9 @@ from app.models.message import Message
 from app.models.read_state import ClientRead
 from app.models.user import User, UserRole
 from app.rbac import ensure_can_write, ensure_client_access, has_min_role, require_permission
-from app.schemas.message import MessageCreate, MessageEdit, MessageOut
+from app.schemas.message import MessageCreate, MessageEdit, MessageListOut, MessageOut
 from app.services import chat_service, storage_service
+from app.services.ws_manager import notify as ws_notify
 from app.services.activity_service import log_activity
 
 # WhatsApp-style: a sender can edit/delete their own message within this window.
@@ -70,12 +71,26 @@ def _ensure_conversation(db: Session, client: Client, channel_id: int | None) ->
     return conv
 
 
-@router.get("/{client_id}/messages", response_model=list[MessageOut])
-def list_messages(client_id: int, db: Session = Depends(get_db), user: User = Depends(require_permission("conversations.view"))):
+@router.get("/{client_id}/messages", response_model=list[MessageListOut])
+def list_messages(
+    client_id: int,
+    before: str | None = None,   # ISO timestamp cursor for scroll-back pagination
+    limit: int = 50,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_permission("conversations.view")),
+):
     client = _client(db, client_id)
     ensure_client_access(user, client)
-    messages = chat_service.list_client_messages(db, client)
-    db.commit()  # persist any lazy backfill
+    limit = max(1, min(limit, 100))
+    before_dt = None
+    if before:
+        try:
+            before_dt = datetime.fromisoformat(before.replace("Z", "+00:00"))
+        except ValueError:
+            before_dt = None
+    messages, backfilled = chat_service.list_client_messages(db, client, limit=limit, before=before_dt)
+    if backfilled:
+        db.commit()  # persist the lazy backfill only when it actually wrote
 
     # "Delete for me" — drop messages this user has hidden from their own view.
     from app.models.read_state import MessageHidden
@@ -85,103 +100,98 @@ def list_messages(client_id: int, db: Session = Depends(get_db), user: User = De
     if hidden_ids:
         messages = [m for m in messages if m.id not in hidden_ids]
     
-    # Load all FileRecords and AudioRecordings to merge them into the message feed
-    from app.models.file import FileRecord
-    from app.models.audio import AudioRecording
-    from app.models.user import User
-    
-    uname = dict(db.execute(select(User.id, User.name)).all())
-    
-    files = db.execute(
-        select(FileRecord).where(FileRecord.client_id == client_id)
-    ).scalars().all()
-    
-    audios = db.execute(
-        select(AudioRecording).where(AudioRecording.client_id == client_id)
-    ).scalars().all()
-    
-    existing_urls = {m.attachment_url for m in messages if m.attachment_url}
-
-    # After a "clear chat", the File/Audio rows survive (Documents and Calls still
-    # list them) but must not flow back into the chat feed. Drop anything created
-    # at or before the cutoff.
-    cleared_at = client.chat_cleared_at
-
-    def _kept(created_at) -> bool:
-        if cleared_at is None or created_at is None:
-            return True
-        when = created_at if created_at.tzinfo else created_at.replace(tzinfo=timezone.utc)
-        cut = cleared_at if cleared_at.tzinfo else cleared_at.replace(tzinfo=timezone.utc)
-        return when > cut
-
-    files = [f for f in files if _kept(f.created_at)]
-    audios = [a for a in audios if _kept(a.created_at)]
-
-    # Build size maps from ALL file/audio rows (before the chat-clear filter) so
-    # that composer-uploaded attachments — whose URLs are already in existing_urls
-    # and therefore excluded from the "orphan" merge below — still have sizes.
-    from app.services import storage_service as _ss
-    all_files_raw = db.execute(
-        select(FileRecord).where(FileRecord.client_id == client_id)
-    ).scalars().all()
-    all_audios_raw = db.execute(
-        select(AudioRecording).where(AudioRecording.client_id == client_id)
-    ).scalars().all()
-    file_sizes: dict[int, int] = {f.id: (f.size or 0) for f in all_files_raw}
+    # Merge orphan attachments (files/audio uploaded OUTSIDE the chat — e.g. via the
+    # Documents or Call Recordings pages) into the feed, but ONLY on the latest page.
+    # Older (cursor) pages are pure message pagination, which also avoids these extra
+    # queries entirely.
+    file_sizes: dict[int, int] = {}
     audio_sizes: dict[int, int] = {}
-    for _a in all_audios_raw:
-        _path = _ss.local_path(_a.storage_key)
-        if _path and os.path.exists(_path):
-            audio_sizes[_a.id] = os.path.getsize(_path)
+    if before_dt is None:
+        from app.models.file import FileRecord
+        from app.models.audio import AudioRecording
+        from app.models.user import User
 
-    merged = list(messages)
+        uname = dict(db.execute(select(User.id, User.name)).all())
 
-    for f in files:
-        url = f.storage_key if f.content_type == "url" else f"/api/files/{f.id}/download"
-        if url not in existing_urls:
-            sender = uname.get(f.uploaded_by, "Team Member")
-            merged.append({
-                "id": -f.id,
-                "client_id": f.client_id,
-                "conversation_id": None,
-                "channel_id": None,
-                "sender_name": sender,
-                "body": "",
-                "is_client": False,
-                "attachment_type": "file",
-                "attachment_url": url,
-                "attachment_name": f.filename,
-                "attachment_size": file_sizes.get(f.id),
-                "sent_at": f.created_at,
-                "created_at": f.created_at,
-                "created_by": f.uploaded_by,
-            })
-            
-    for a in audios:
-        url = f"/api/audio/{a.id}/download"
-        if url not in existing_urls:
-            sender = uname.get(a.uploaded_by, "Team Member")
-            merged.append({
-                "id": -100000 - a.id,
-                "client_id": a.client_id,
-                "conversation_id": None,
-                "channel_id": None,
-                "sender_name": sender,
-                "body": "",
-                "is_client": False,
-                "attachment_type": "audio",
-                "attachment_url": url,
-                "attachment_name": a.filename,
-                "attachment_size": audio_sizes.get(a.id),
-                "sent_at": a.created_at,
-                "created_at": a.created_at,
-                "created_by": a.uploaded_by,
-            })
-            
-    # Sort merged list chronologically
-    merged.sort(key=lambda m: (
-        (m.sent_at or m.created_at) if isinstance(m, Message) else (m.get('sent_at') or m.get('created_at'))
-    ))
+        all_files_raw = db.execute(
+            select(FileRecord).where(FileRecord.client_id == client_id)
+        ).scalars().all()
+        all_audios_raw = db.execute(
+            select(AudioRecording).where(AudioRecording.client_id == client_id)
+        ).scalars().all()
+
+        existing_urls = {m.attachment_url for m in messages if m.attachment_url}
+
+        # After a "clear chat", the File/Audio rows survive (Documents and Calls still
+        # list them) but must not flow back into the chat feed. Drop anything created
+        # at or before the cutoff.
+        cleared_at = client.chat_cleared_at
+
+        def _kept(created_at) -> bool:
+            if cleared_at is None or created_at is None:
+                return True
+            when = created_at if created_at.tzinfo else created_at.replace(tzinfo=timezone.utc)
+            cut = cleared_at if cleared_at.tzinfo else cleared_at.replace(tzinfo=timezone.utc)
+            return when > cut
+
+        files = [f for f in all_files_raw if _kept(f.created_at)]
+        audios = [a for a in all_audios_raw if _kept(a.created_at)]
+
+        # Audio size is stored at upload now, so no per-read disk stat — legacy rows
+        # without a stored size simply show none.
+        file_sizes = {f.id: (f.size or 0) for f in all_files_raw}
+        audio_sizes = {a.id: a.size for a in all_audios_raw if a.size is not None}
+
+        merged = list(messages)
+
+        for f in files:
+            url = f.storage_key if f.content_type == "url" else f"/api/files/{f.id}/download"
+            if url not in existing_urls:
+                sender = uname.get(f.uploaded_by, "Team Member")
+                merged.append({
+                    "id": -f.id,
+                    "client_id": f.client_id,
+                    "conversation_id": None,
+                    "channel_id": None,
+                    "sender_name": sender,
+                    "body": "",
+                    "is_client": False,
+                    "attachment_type": "file",
+                    "attachment_url": url,
+                    "attachment_name": f.filename,
+                    "attachment_size": file_sizes.get(f.id),
+                    "sent_at": f.created_at,
+                    "created_at": f.created_at,
+                    "created_by": f.uploaded_by,
+                })
+
+        for a in audios:
+            url = f"/api/audio/{a.id}/download"
+            if url not in existing_urls:
+                sender = uname.get(a.uploaded_by, "Team Member")
+                merged.append({
+                    "id": -100000 - a.id,
+                    "client_id": a.client_id,
+                    "conversation_id": None,
+                    "channel_id": None,
+                    "sender_name": sender,
+                    "body": "",
+                    "is_client": False,
+                    "attachment_type": "audio",
+                    "attachment_url": url,
+                    "attachment_name": a.filename,
+                    "attachment_size": audio_sizes.get(a.id),
+                    "sent_at": a.created_at,
+                    "created_at": a.created_at,
+                    "created_by": a.uploaded_by,
+                })
+
+        # Sort merged list chronologically
+        merged.sort(key=lambda m: (
+            (m.sent_at or m.created_at) if isinstance(m, Message) else (m.get('sent_at') or m.get('created_at'))
+        ))
+    else:
+        merged = list(messages)   # already chronological from the service
 
     # WhatsApp-style read receipts: an outgoing (team) message is "read" once a
     # DIFFERENT teammate has opened this thread at/after the message was sent.
@@ -362,6 +372,7 @@ def send_message(
     # The chat list orders by activity and shows unread badges — refresh it so the
     # sender's chat jumps to the top for everyone on their next poll.
     invalidate_cache("clients:", "dashboard:")
+    ws_notify({"type": "message", "client_id": client.id, "action": "new"})
     msg.mine = True
     return msg
 
@@ -402,7 +413,7 @@ async def send_attachment(
         prefix = f"{folder}/projects/{project_folder_name}" if project_id else f"{folder}/audio"
         key = storage_service.save_bytes(data, filename, prefix=prefix)
         rec = AudioRecording(client_id=client.id, project_id=project_id, filename=filename, storage_key=key,
-                             content_type=ctype, uploaded_by=actor.id)
+                             content_type=ctype, size=len(data), uploaded_by=actor.id)
         db.add(rec); db.flush()
         attach_type, attach_url = "audio", f"/api/audio/{rec.id}/download"
         log_activity(db, action="audio.uploaded", actor_id=actor.id, client_id=client.id, detail={"filename": filename})
@@ -426,6 +437,7 @@ async def send_attachment(
     db.commit()
     db.refresh(msg)
     invalidate_cache("clients:", "dashboard:")
+    ws_notify({"type": "message", "client_id": client.id, "action": "new"})
     msg.mine = True
     return msg
 
@@ -511,6 +523,7 @@ def edit_message(
     msg.edited_at = datetime.now(timezone.utc)
     db.commit()
     db.refresh(msg)
+    ws_notify({"type": "message", "client_id": client_id, "action": "edit"})
     msg.mine, msg.edited = True, True
     return msg
 
@@ -525,6 +538,7 @@ def delete_message(
     msg = _own_recent_message(db, client_id, message_id, actor)
     msg.is_deleted = True
     db.commit()
+    ws_notify({"type": "message", "client_id": client_id, "action": "delete"})
 
 
 @router.post("/{client_id}/messages/{message_id}/hide", status_code=204)

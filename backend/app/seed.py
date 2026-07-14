@@ -52,6 +52,11 @@ _COLUMN_PATCHES = [
     # it can hold a PlatformType.key alongside the built-ins. Idempotent — running
     # it when the column is already VARCHAR is a harmless no-op.
     "ALTER TABLE channels ALTER COLUMN platform TYPE VARCHAR(64) USING platform::text",
+    # Perf (chat feed): capture audio size at upload so reads don't stat the disk,
+    # and index the columns the message list filters/sorts on.
+    "ALTER TABLE audio_recordings ADD COLUMN IF NOT EXISTS size INTEGER",
+    "CREATE INDEX IF NOT EXISTS ix_messages_client_sent ON messages (client_id, sent_at)",
+    "CREATE INDEX IF NOT EXISTS ix_messages_conv_created ON messages (conversation_id, created_at)",
 ]
 
 
@@ -129,7 +134,7 @@ ALL_PERMISSIONS = [
     ("users.permissions", "Edit Permissions", "Users", "Edit role permissions in matrix", [UserRole.super_admin]),
     ("activity.view", "View Activity Log", "Activity", "Access system audit/activity logs", [UserRole.super_admin, UserRole.admin, UserRole.team_lead]),
     ("bitrix.manage", "Manage Bitrix", "Bitrix", "Manage Bitrix24 portal connection settings", [UserRole.super_admin, UserRole.admin]),
-    ("integrations.manage", "Manage Integrations", "Integrations", "Manage third-party integrations and app settings", [UserRole.super_admin]),
+    ("integrations.manage", "Manage Integrations", "Integrations", "Manage AI provider key, model and system prompts", [UserRole.super_admin]),
 ]
 
 

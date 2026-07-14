@@ -8,7 +8,7 @@
   if (!admin) { const b = document.getElementById("new-channel"); if (b) b.remove(); }
   if (!canWrite()) { const b = document.getElementById("new-client"); if (b) b.remove(); }
 
-  const BUILTINS = ["whatsapp", "upwork", "slack", "email", "telegram"];
+  const BUILTINS = ["whatsapp", "upwork", "slack", "email", "telegram", "linkedin"];
   let channels = [], allClients = [], users = [];
   let typeFilter = "all", userFilter = "", searchTerm = "";
   let newPlatformLogo = "";   // data-URL of the logo picked for a "Create New" platform
