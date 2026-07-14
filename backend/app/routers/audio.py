@@ -85,6 +85,7 @@ async def upload_audio(
         filename=upload.filename or "audio.mp3",
         storage_key=key,
         content_type=upload.content_type,
+        size=len(data),
         uploaded_by=actor.id,
     )
     db.add(rec)

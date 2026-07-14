@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, String, Text, func
+from sqlalchemy import Boolean, DateTime, ForeignKey, Index, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import Base
@@ -15,6 +15,12 @@ class Message(Base):
     """
 
     __tablename__ = "messages"
+    __table_args__ = (
+        # Serves the chat feed (filter by client, order by time) and the
+        # per-conversation reads without a full scan.
+        Index("ix_messages_client_sent", "client_id", "sent_at"),
+        Index("ix_messages_conv_created", "conversation_id", "created_at"),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     client_id: Mapped[int] = mapped_column(ForeignKey("clients.id", ondelete="CASCADE"), index=True)

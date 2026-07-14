@@ -1,3 +1,5 @@
+from datetime import datetime
+
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -129,16 +131,26 @@ def analyze_conversation(
 @router.get("/conversations/{conv_id}/analysis", response_model=AIAnalysisOut | None)
 def latest_conversation_analysis(
     conv_id: int,
+    start: datetime | None = None,
+    end: datetime | None = None,
     db: Session = Depends(get_db),
     user: User = Depends(require_permission("conversations.view"))
 ):
+    """The most recent analysis for this conversation. Pass start/end (ISO) to view
+    a historical report — the latest analysis generated within that window (used by
+    the Daily/Weekly/Monthly filter)."""
     conv = db.get(Conversation, conv_id)
     if not conv:
         raise HTTPException(status_code=404, detail="Conversation not found")
     ensure_client_access(user, db.get(Client, conv.client_id))
+    q = select(AIAnalysis).where(
+        AIAnalysis.target_type == AnalysisTarget.conversation,
+        AIAnalysis.target_id == conv_id,
+    )
+    if start is not None:
+        q = q.where(AIAnalysis.created_at >= start)
+    if end is not None:
+        q = q.where(AIAnalysis.created_at < end)
     return db.execute(
-        select(AIAnalysis).where(
-            AIAnalysis.target_type == AnalysisTarget.conversation,
-            AIAnalysis.target_id == conv_id,
-        ).order_by(AIAnalysis.created_at.desc()).limit(1)
+        q.order_by(AIAnalysis.created_at.desc()).limit(1)
     ).scalar_one_or_none()

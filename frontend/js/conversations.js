@@ -253,6 +253,52 @@
   let sending = false;          // guards against double-send (Enter + click)
   let threadSig = "";           // signature of the last-rendered message set
 
+  // Message pagination state (cursor-based scroll-back).
+  const PAGE_LIMIT = 50;
+  let loadedMsgs = [];          // full set currently in view (oldest → newest, deduped by id)
+  let hasMoreOlder = false;     // is there an older page to load?
+  let loadingOlder = false;     // guard against concurrent scroll-loads
+
+  // Merge a freshly-fetched page (poll) into the loaded set: updates changed
+  // messages, adds new ones, and keeps older messages already loaded via scroll.
+  function mergeMessages(existing, incoming) {
+    const byId = new Map(existing.map((m) => [m.id, m]));
+    for (const m of incoming) byId.set(m.id, m);
+    const arr = [...byId.values()];
+    arr.sort((a, b) => {
+      const ta = new Date(a.sent_at || a.created_at).getTime();
+      const tb = new Date(b.sent_at || b.created_at).getTime();
+      return ta - tb || a.id - b.id;
+    });
+    return arr;
+  }
+
+  // Fetch the page immediately older than what's loaded and prepend it, keeping
+  // the user's scroll position anchored to the message they were reading.
+  async function loadOlderMessages() {
+    if (!hasMoreOlder || loadingOlder || !loadedMsgs.length || active == null) return;
+    loadingOlder = true;
+    const body = document.getElementById("th2-body");
+    const prevHeight = body ? body.scrollHeight : 0;
+    const cursor = loadedMsgs[0].sent_at || loadedMsgs[0].created_at;
+    try {
+      const older = await Api.get(
+        `/api/clients/${active}/messages?before=${encodeURIComponent(cursor)}&limit=${PAGE_LIMIT}`,
+        { stale: false }
+      );
+      const known = new Set(loadedMsgs.map((m) => m.id));
+      const fresh = older.filter((m) => !known.has(m.id));
+      hasMoreOlder = older.length >= PAGE_LIMIT;
+      if (fresh.length) {
+        loadedMsgs = [...fresh, ...loadedMsgs];
+        threadSig = sigOf(loadedMsgs);
+        paintMessages(loadedMsgs, true);
+        if (body) body.scrollTop = body.scrollHeight - prevHeight;   // anchor position
+      }
+    } catch (_) { /* transient — try again on next scroll */ }
+    finally { loadingOlder = false; }
+  }
+
   // ── Presence + typing + read receipts (team-scoped, light polling) ──
   function markRead(clientId) { return Api.post(`/api/clients/${clientId}/read`).catch(() => {}); }
 
@@ -361,7 +407,7 @@
     // opens the client's full profile page. Only the name and channel show here;
     // company/email/phone live in the contact panel & full profile.
     document.getElementById("th2-head").innerHTML = `
-      <button class="th2-id" id="open-contact" title="Contact info">
+      <button class="th2-id" id="open-contact" title="Open full profile">
         <span class="av2" style="background:${avHash(cl.name)};width:38px;height:38px;font-size:13px;border-radius:50%;display:grid;place-items:center;color:#fff;font-weight:700;flex-shrink:0">
           ${initialsOf(cl.name)}
         </span>
@@ -384,14 +430,10 @@
         </a>
         <button class="icon-btn" id="chat-menu-btn" title="Chat options" aria-haspopup="true">${Icon("dots", { size: 16 })}</button>
       </div>`;
-    document.getElementById("open-contact").onclick = (e) => {
-      // Clicking the name opens the full Client Profile page; the rest of the
-      // identity block (avatar/channel) opens the quick contact panel.
-      if (e.target.closest(".name-link")) {
-        location.href = `/client?id=${cl.id}&from=conversations`;
-        return;
-      }
-      openContactPanel(cl.id);
+    document.getElementById("open-contact").onclick = () => {
+      // Clicking anywhere on the identity block (avatar or name) opens the full
+      // Client Profile page.
+      location.href = `/client?id=${cl.id}&from=conversations`;
     };
     if (canEditStatus) wireStatusControl(cl);
     document.getElementById("chat-menu-btn").onclick = (e) => { e.stopPropagation(); openChatMenu(e.currentTarget, cl); };
@@ -514,12 +556,15 @@
       renderReplyBar();  // restore the reply preview if one is active
     }
 
-    // Load messages fresh (never stale) so a send / delete / incoming message
-    // appears at once rather than only after a manual refresh.
+    // Load the latest page fresh (never stale) so a send / delete / incoming
+    // message appears at once. Older pages load on scroll-up.
     try {
-      const msgs = await Api.get(`/api/clients/${cl.id}/messages`, { stale: false });
-      threadSig = sigOf(msgs);
-      paintMessages(msgs, false);
+      const msgs = await Api.get(`/api/clients/${cl.id}/messages?limit=${PAGE_LIMIT}`, { stale: false });
+      loadedMsgs = msgs;
+      hasMoreOlder = msgs.length >= PAGE_LIMIT;
+      loadingOlder = false;
+      threadSig = sigOf(loadedMsgs);
+      paintMessages(loadedMsgs, false);
     } catch (e) { toast(e.message); }
   }
 
@@ -535,14 +580,17 @@
   async function refreshMessagesIfChanged(clientId) {
     if (active !== clientId || view === "archived" || sending) return;
     if (document.querySelector(".bubble2.editing") || document.getElementById("msg-menu") || selectMode) return;
-    let msgs;
-    try { msgs = await Api.get(`/api/clients/${clientId}/messages`, { stale: false }); }
+    let latest;
+    try { latest = await Api.get(`/api/clients/${clientId}/messages?limit=${PAGE_LIMIT}`, { stale: false }); }
     catch (_) { return; }
     if (active !== clientId) return;                 // client switched mid-fetch
-    const sig = sigOf(msgs);
+    // Merge the latest page into what's loaded so scroll-back history is preserved.
+    const merged = mergeMessages(loadedMsgs, latest);
+    const sig = sigOf(merged);
     if (sig === threadSig) return;                   // nothing new
     threadSig = sig;
-    paintMessages(msgs, true);
+    loadedMsgs = merged;
+    paintMessages(loadedMsgs, true);
     // The thread is open and on-screen, so anything that just arrived is "seen" —
     // advance the read marker so this chat's badge stays cleared, then refresh the
     // list so ordering + unread badges update (moves this chat to the top).
@@ -1243,6 +1291,51 @@
   // Collapsed by default — the analysis is opt-in, opened via the "AI" tab.
   let aiPanelOpen = false;
   let aiRenderedFor = null;   // client id the AI panel currently reflects
+  let aiConvId = null;        // conversation the AI panel is reading
+  // Report time filter: "latest" (newest overall) or daily/weekly/monthly + a
+  // picker value, so users can browse historical AI Chat Analysis reports.
+  let aiFilter = { mode: "latest", value: "" };
+
+  // Turn the current filter into a [start, end) instant range (or null = latest).
+  function aiFilterRange() {
+    const f = aiFilter;
+    if (f.mode === "latest" || !f.value) return null;
+    if (f.mode === "daily") {
+      const s = new Date(f.value + "T00:00:00");
+      const e = new Date(s); e.setDate(s.getDate() + 1);
+      return [s, e];
+    }
+    if (f.mode === "monthly") {
+      const [y, mo] = f.value.split("-").map(Number);
+      return [new Date(y, mo - 1, 1), new Date(y, mo, 1)];
+    }
+    if (f.mode === "weekly") {
+      const [y, w] = f.value.split("-W").map(Number);   // e.g. "2026-W29"
+      const jan4 = new Date(y, 0, 4);
+      const wk1Mon = new Date(jan4); wk1Mon.setDate(jan4.getDate() - ((jan4.getDay() + 6) % 7));
+      const s = new Date(wk1Mon); s.setDate(wk1Mon.getDate() + (w - 1) * 7);
+      const e = new Date(s); e.setDate(s.getDate() + 7);
+      return [s, e];
+    }
+    return null;
+  }
+
+  // Default picker value for a mode (today / this week / this month).
+  function aiDefaultValue(mode) {
+    const d = new Date();
+    const p2 = (n) => String(n).padStart(2, "0");
+    if (mode === "daily") return `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())}`;
+    if (mode === "monthly") return `${d.getFullYear()}-${p2(d.getMonth() + 1)}`;
+    if (mode === "weekly") {
+      // ISO week number for today.
+      const t = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
+      const day = (t.getUTCDay() + 6) % 7; t.setUTCDate(t.getUTCDate() - day + 3);
+      const firstThu = new Date(Date.UTC(t.getUTCFullYear(), 0, 4));
+      const wk = 1 + Math.round(((t - firstThu) / 86400000 - 3 + ((firstThu.getUTCDay() + 6) % 7)) / 7);
+      return `${t.getUTCFullYear()}-W${p2(wk)}`;
+    }
+    return "";
+  }
 
   function setAiPanelOpen(open) {
     aiPanelOpen = open;
@@ -1268,12 +1361,12 @@
     const cl = clients.find((x) => x.id === active);
     aiRenderedFor = active;   // this panel now reflects the active client
     const scroll = document.getElementById("ai-scroll");
-    const modelSub = document.getElementById("ai-model-sub");
     scroll.innerHTML = `<div style="padding:20px 0;text-align:center;color:var(--muted);font-size:12.5px">Loading...</div>`;
 
     let convs = [];
     try { convs = await Api.get(`/api/conversations?client_id=${cl.id}&is_deleted=${view === "archived"}`); } catch (_) {}
     if (!convs.length) {
+      aiConvId = null;
       scroll.innerHTML = `<div class="ai2-empty">
         <div class="ai-icon-wrap">${Icon("sparkles", { size: 24 })}</div>
         <h4>No analysis yet</h4>
@@ -1281,26 +1374,81 @@
       </div>`;
       return;
     }
-    const convId = convs[0].id;
+    aiConvId = convs[0].id;
+    aiFilter = { mode: "latest", value: "" };   // reset filter when switching client
+
+    // Filter bar (period + date/week/month picker) stays fixed; the report body
+    // below reloads whenever the filter changes.
+    const modes = [["latest", "Latest"], ["daily", "Daily"], ["weekly", "Weekly"], ["monthly", "Monthly"]];
+    scroll.innerHTML = `
+      <div class="ai-filter">
+        <div class="ai-fseg" id="ai-fseg">
+          ${modes.map(([m, l]) => `<button type="button" data-mode="${m}" class="${m === "latest" ? "on" : ""}">${l}</button>`).join("")}
+        </div>
+        <input type="date" id="ai-fdate" class="form-control form-control-sm" hidden />
+      </div>
+      <div id="ai-report"><div style="padding:20px 0;text-align:center;color:var(--muted);font-size:12.5px">Loading...</div></div>`;
+
+    const seg = document.getElementById("ai-fseg");
+    const dateInput = document.getElementById("ai-fdate");
+    seg.querySelectorAll("[data-mode]").forEach((b) => b.onclick = () => {
+      aiFilter.mode = b.dataset.mode;
+      seg.querySelectorAll("[data-mode]").forEach((x) => x.classList.toggle("on", x === b));
+      if (aiFilter.mode === "latest") {
+        dateInput.hidden = true;
+      } else {
+        dateInput.type = aiFilter.mode === "daily" ? "date" : aiFilter.mode === "weekly" ? "week" : "month";
+        aiFilter.value = aiDefaultValue(aiFilter.mode);
+        dateInput.value = aiFilter.value;
+        dateInput.hidden = false;
+      }
+      loadAiReport();
+    });
+    dateInput.onchange = () => { aiFilter.value = dateInput.value; loadAiReport(); };
+
+    await loadAiReport();
+  }
+
+  // Fetch + render the report body for the current conversation and filter.
+  async function loadAiReport() {
+    const report = document.getElementById("ai-report");
+    if (!report || !aiConvId) return;
+    const modelSub = document.getElementById("ai-model-sub");
+    report.innerHTML = `<div style="padding:20px 0;text-align:center;color:var(--muted);font-size:12.5px">Loading...</div>`;
+
+    const range = aiFilterRange();
+    let url = `/api/ai/conversations/${aiConvId}/analysis`;
+    if (range) url += `?start=${encodeURIComponent(range[0].toISOString())}&end=${encodeURIComponent(range[1].toISOString())}`;
+
     let a = null;
-    try { a = await Api.get(`/api/ai/conversations/${convId}/analysis`); } catch (_) {}
+    try { a = await Api.get(url, { stale: false }); } catch (_) {}
+
     if (!a) {
-      scroll.innerHTML = `<div class="ai2-empty">
+      // No report for this window — distinguish "never analysed" from "none in range".
+      const periodLabel = aiFilter.mode === "latest" ? "" :
+        aiFilter.mode === "daily" ? " for this day" :
+        aiFilter.mode === "weekly" ? " for this week" : " for this month";
+      report.innerHTML = `<div class="ai2-empty">
         <div class="ai-icon-wrap">${Icon("sparkles", { size: 24 })}</div>
-        <h4>Not analyzed yet</h4>
-        <p>Run AI analysis on this client's latest conversation.</p>
-        ${writable ? `<button class="btn btn-primary btn-sm" id="run-ai" style="margin:0 auto">Run AI analysis</button>` : ""}
+        <h4>${aiFilter.mode === "latest" ? "Not analyzed yet" : "No report" + periodLabel}</h4>
+        <p>${aiFilter.mode === "latest"
+          ? "Run AI analysis on this client's latest conversation."
+          : "There's no AI Chat Analysis in the selected period. Pick another, or view the latest."}</p>
+        ${(aiFilter.mode === "latest" && writable) ? `<button class="btn btn-primary btn-sm" id="run-ai" style="margin:0 auto">Run AI analysis</button>` : ""}
       </div>`;
-      const r = document.getElementById("run-ai"); if (r) r.onclick = () => runAI(convId);
+      const r = document.getElementById("run-ai"); if (r) r.onclick = () => runAI(aiConvId);
       return;
     }
+
     const m = a.response_metrics || {};
     if (a.model) modelSub.textContent = `${a.model} · summary & sentiment`;
-    scroll.innerHTML = `
+    const when = a.created_at ? new Date(a.created_at).toLocaleString([], { dateStyle: "medium", timeStyle: "short" }) : "";
+    report.innerHTML = `
       <div style="display:flex;justify-content:space-between;align-items:center">
         ${sentPill(_ns(a.sentiment))}
         ${writable ? `<button class="btn btn-soft btn-sm" id="run-ai">Re-run analysis</button>` : ""}
       </div>
+      ${when ? `<div class="ai-report-when">Report generated ${esc(when)}</div>` : ""}
       <div class="ai2-block">
         <div class="lab"><span class="lab-dot"></span> Summary</div>
         <div class="ai2-sum">${esc(a.summary || "—")}</div>
@@ -1324,7 +1472,7 @@
         <div class="lab"><span class="lab-dot purple"></span> Follow-up</div>
         <div class="ai2-follow">${a.follow_ups.map(esc).join(" ")}</div>
       </div>` : ""}`;
-    const r = document.getElementById("run-ai"); if (r) r.onclick = () => runAI(convId);
+    const r = document.getElementById("run-ai"); if (r) r.onclick = () => runAI(aiConvId);
   }
 
   async function runAI(convId) {
@@ -1467,6 +1615,11 @@
 
   makeDraggable("drag-left", "conv-left", "left");
   makeDraggable("drag-right", "conv-right", "right");
+
+  // Infinite scroll-back: near the top of the thread, pull the next older page.
+  document.getElementById("th2-body").addEventListener("scroll", (e) => {
+    if (e.target.scrollTop < 80) loadOlderMessages();
+  });
 
   // In select mode, clicking a message toggles its selection (capture phase so it
   // preempts the image-lightbox / other click handlers).
