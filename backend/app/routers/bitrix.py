@@ -162,7 +162,7 @@ def sync_project(
 
 @router.post("/events")
 async def webhook_events(request: Request, db: Session = Depends(get_db)):
-    """Receives outbound events from Bitrix24 for real-time task creation / updates."""
+    """Receives outbound events from Bitrix24 for real-time task creation / updates / messages."""
     try:
         form = await request.form()
     except Exception:
@@ -180,6 +180,22 @@ async def webhook_events(request: Request, db: Session = Depends(get_db)):
         task_id = form.get("data[FIELDS_AFTER][ID]") or form.get("data[id]")
     elif "SONETGROUP" in event:
         group_id = form.get("data[GROUP_ID]") or form.get("data[id]")
+    elif "MESSAGE" in event:
+        chat_id = (
+            form.get("data[params][CHAT_ID]") or 
+            form.get("data[PARAMS][CHAT_ID]") or 
+            form.get("data[message][chat_id]") or 
+            form.get("data[MESSAGE][CHAT_ID]")
+        )
+        if chat_id:
+            try:
+                # Query the chat details to resolve the Sonet Group ID (entity_id)
+                chat_data = bitrix_service.call_api(db, "im.chat.get", {"CHAT_ID": int(chat_id)})
+                result = chat_data.get("result") or {}
+                if result.get("entity_type") == "SONET_GROUP":
+                    group_id = result.get("entity_id")
+            except Exception:
+                pass
 
     # Resolve task group if we received a task event
     if task_id:

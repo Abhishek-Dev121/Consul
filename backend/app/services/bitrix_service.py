@@ -421,16 +421,26 @@ def _sync_chats(db: Session, proj: Project, client_id: int) -> None:
 
     messages_synced = False
 
-    # Attempt 1: Fetch Group Chat via im.chat.get if permissions allow
+    # Attempt 1: Fetch Group Chat directly via DIALOG_ID = sg<group_id> or via im.chat.get if permissions allow
     try:
-        chat_res = call_api(db, "im.chat.get", {"ENTITY_TYPE": "SONET_GROUP", "ENTITY_ID": proj.bitrix_project_id})
-        chat_id = chat_res.get("result", {}).get("id")
-        if chat_id:
-            msg_res = call_api(db, "im.dialog.messages.get", {"CHAT_ID": chat_id})
+        messages = []
+        users_list = []
+        try:
+            # 1a. Try direct fetch using DIALOG_ID = sg<group_id> (e.g. sg620)
+            msg_res = call_api(db, "im.dialog.messages.get", {"DIALOG_ID": f"sg{proj.bitrix_project_id}"})
             messages = msg_res.get("result", {}).get("messages") or []
             users_list = msg_res.get("result", {}).get("users") or []
-            users_map = {str(u["id"]): f"{u.get('name', '')} {u.get('last_name', '')}".strip() for u in users_list}
+        except Exception:
+            # 1b. Fallback: Fetch Chat ID first via im.chat.get, then query messages
+            chat_res = call_api(db, "im.chat.get", {"ENTITY_TYPE": "SONET_GROUP", "ENTITY_ID": proj.bitrix_project_id})
+            chat_id = chat_res.get("result", {}).get("id")
+            if chat_id:
+                msg_res = call_api(db, "im.dialog.messages.get", {"CHAT_ID": chat_id})
+                messages = msg_res.get("result", {}).get("messages") or []
+                users_list = msg_res.get("result", {}).get("users") or []
 
+        if messages:
+            users_map = {str(u["id"]): f"{u.get('name', '')} {u.get('last_name', '')}".strip() for u in users_list}
             for m in messages:
                 mid = f"chat_{m['id']}"
                 exists = db.execute(select(Message).where(Message.bitrix_message_id == mid)).first()
