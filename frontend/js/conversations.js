@@ -256,6 +256,8 @@
   // Message pagination state (cursor-based scroll-back).
   const PAGE_LIMIT = 50;
   const threadCache = {};       // clientId -> last-loaded messages, for instant re-open
+  const pendingDelete = new Set();  // message ids with a delete/hide in flight (guards double-trigger)
+  let sendSeq = 0;              // unique-ish id source for optimistic (unsent) bubbles
   let loadedMsgs = [];          // full set currently in view (oldest → newest, deduped by id)
   let hasMoreOlder = false;     // is there an older page to load?
   let loadingOlder = false;     // guard against concurrent scroll-loads
@@ -960,19 +962,54 @@
   }
 
   async function deleteChatMessage(id) {
+    if (pendingDelete.has(id)) return;   // already being deleted/hidden — ignore
     const ok = await confirmDialog(
       "This removes the message for everyone in this conversation. This can't be undone.",
       { title: "Delete for everyone?", confirmText: "Delete for everyone" }
     );
-    if (!ok) return;
-    try { await Api.del(`/api/clients/${active}/messages/${id}`); await renderThread(); toast("Message deleted for everyone", "success"); }
-    catch (e) { toast(e.message); }
+    if (!ok || pendingDelete.has(id)) return;
+    const clientId = active;
+    pendingDelete.add(id);
+    // Optimistic: show the "deleted" placeholder at once so the message can't be
+    // re-actioned while the request is in flight.
+    if (active === clientId) {
+      const m = loadedMsgs.find((x) => x.id === id);
+      if (m) {
+        m.deleted = true; m.body = "";
+        m.attachment_type = m.attachment_url = m.attachment_name = null;
+        threadSig = sigOf(loadedMsgs); threadCache[clientId] = loadedMsgs;
+        paintMessages(loadedMsgs, true);
+      }
+    }
+    try {
+      await Api.del(`/api/clients/${clientId}/messages/${id}`);
+      if (active === clientId) toast("Message deleted for everyone", "success");
+    } catch (e) {
+      toast(e.message);
+      if (active === clientId) await renderThread();   // revert optimistic change
+    } finally { pendingDelete.delete(id); }
   }
 
   async function hideChatMessage(id) {
     // "Delete for me" — hides only from the current user's view.
-    try { await Api.post(`/api/clients/${active}/messages/${id}/hide`); await renderThread(); toast("Message deleted for you", "success"); }
-    catch (e) { toast(e.message); }
+    if (pendingDelete.has(id)) return;
+    const clientId = active;
+    pendingDelete.add(id);
+    // Optimistic: remove from view immediately.
+    let reverted = null;
+    if (active === clientId) {
+      reverted = loadedMsgs;
+      loadedMsgs = loadedMsgs.filter((x) => x.id !== id);
+      threadSig = sigOf(loadedMsgs); threadCache[clientId] = loadedMsgs;
+      paintMessages(loadedMsgs, true);
+    }
+    try {
+      await Api.post(`/api/clients/${clientId}/messages/${id}/hide`);
+      if (active === clientId) toast("Message deleted for you", "success");
+    } catch (e) {
+      toast(e.message);
+      if (active === clientId && reverted) { loadedMsgs = reverted; await renderThread(); }
+    } finally { pendingDelete.delete(id); }
   }
 
   function renderAttPreviews() {
@@ -1018,19 +1055,56 @@
     const cl = clients.find((x) => x.id === active);
     if (!cl) return;
 
+    const clientId = cl.id;
     sending = true;
     const sendBtn = document.getElementById("send-btn");
     if (sendBtn) sendBtn.disabled = true;
     // Take ownership of the queue immediately so a second trigger sees nothing.
     pendingAttachments = [];
 
+    // Append the just-created message straight into the thread — the POST/upload
+    // returns it, so no full re-fetch is needed and it appears instantly.
+    const appendCreated = (created) => {
+      if (active !== clientId || !created || !created.id) return;
+      loadedMsgs = mergeMessages(loadedMsgs, [created]);
+      threadSig = sigOf(loadedMsgs);
+      threadCache[clientId] = loadedMsgs;
+      paintMessages(loadedMsgs, false);   // scroll to bottom
+    };
+
     try {
       // Send text first (carrying the quoted-reply target, if any).
       if (text) {
-        await Api.post(`/api/clients/${cl.id}/messages`, { body: text, reply_to_id: replyingTo ? replyingTo.id : null });
-        ta.value = "";
-        ta.style.height = "auto";
-        clearReply();
+        const replyId = replyingTo ? replyingTo.id : null;
+        // Show the bubble INSTANTLY (before the network call), then reconcile.
+        const tempId = 2000000000 + (sendSeq++);
+        const now = new Date().toISOString();
+        const optimistic = {
+          id: tempId, sender_name: (typeof CURRENT_USER !== "undefined" && CURRENT_USER && CURRENT_USER.name) || "You",
+          body: text, is_client: false, sent_at: now, created_at: now,
+          mine: true, read: false, edited: false, deleted: false,
+          reply_to_sender: replyingTo ? replyingTo.sender : null,
+          reply_to_text: replyingTo ? replyingTo.snippet : null,
+        };
+        ta.value = ""; ta.style.height = "auto"; clearReply();
+        if (active === clientId) {
+          loadedMsgs = mergeMessages(loadedMsgs, [optimistic]);
+          threadSig = sigOf(loadedMsgs);
+          paintMessages(loadedMsgs, false);   // appears immediately, scrolled to bottom
+        }
+        // Confirm with the server, then swap the temp bubble for the real message.
+        try {
+          const created = await Api.post(`/api/clients/${clientId}/messages`, { body: text, reply_to_id: replyId });
+          if (active === clientId && created && created.id) {
+            loadedMsgs = mergeMessages(loadedMsgs.filter((m) => m.id !== tempId), [created]);
+            threadSig = sigOf(loadedMsgs); threadCache[clientId] = loadedMsgs;
+            paintMessages(loadedMsgs, true);
+          }
+        } catch (e) {
+          toast("Message failed: " + e.message);
+          if (active === clientId) { loadedMsgs = loadedMsgs.filter((m) => m.id !== tempId); paintMessages(loadedMsgs, true); }
+          ta.value = text;   // restore so the user can retry
+        }
       }
       renderAttPreviews();   // clear the composer preview strip
 
@@ -1038,21 +1112,14 @@
       for (const file of files) {
         const bubble = addUploadingBubble(file);
         try {
-          await Api.uploadForm(`/api/clients/${cl.id}/messages/upload`, uploadBody(file),
+          const created = await Api.uploadForm(`/api/clients/${clientId}/messages/upload`, uploadBody(file),
             (frac) => setUploadProgress(bubble, frac));
           setUploadProgress(bubble, 1);
+          appendCreated(created);   // replaces the uploading bubble on repaint
         } catch (e) {
           markUploadFailed(bubble, file.name);
           toast("Could not upload " + file.name + ": " + e.message);
         }
-      }
-      await renderThread();   // repaint from the server (replaces the bubbles)
-      // Reload clients to update last_activity and unread_count (moves chat to top)
-      await load();
-      // Re-select the active client to keep it highlighted
-      if (active) {
-        const activeEl = document.querySelector(`#cl-scroll .ci2[data-id="${active}"]`);
-        if (activeEl) activeEl.classList.add("on");
       }
     } catch (e) {
       toast(e.message);
@@ -1061,6 +1128,11 @@
       const b = document.getElementById("send-btn");
       if (b) b.disabled = false;
     }
+
+    // Reconcile in the background — never block the composer on these. The list
+    // reorder/unread and read-receipt state catch up without holding up the send.
+    refreshList();
+    if (active === clientId) refreshMessagesIfChanged(clientId);
   }
 
   function uploadBody(file) { const fd = new FormData(); fd.append("upload", file); return fd; }
