@@ -2,6 +2,9 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from datetime import datetime, timezone
+
+from app.cache import invalidate_cache
 from app.database import get_db
 from app.deps import get_current_user
 from app.models.channel import Channel
@@ -183,6 +186,30 @@ def update_client(
     return client
 
 
+@router.post("/{client_id}/archive", status_code=204)
+def archive_client(client_id: int, db: Session = Depends(get_db), actor: User = Depends(get_current_user)):
+    """Soft-archive: move the client (and its chat) to the Archive. Reversible via /restore."""
+    client = _load(db, client_id)
+    ensure_client_access(actor, client)
+    ensure_can_write(actor)
+    client.archived_at = datetime.now(timezone.utc)
+    log_activity(db, action="client.archived", actor_id=actor.id, client_id=client.id)
+    db.commit()
+    invalidate_cache("clients:", "dashboard:")
+
+
+@router.post("/{client_id}/restore", status_code=204)
+def restore_client(client_id: int, db: Session = Depends(get_db), actor: User = Depends(get_current_user)):
+    """Move an archived client back to the active list."""
+    client = _load(db, client_id)
+    ensure_client_access(actor, client)
+    ensure_can_write(actor)
+    client.archived_at = None
+    log_activity(db, action="client.restored", actor_id=actor.id, client_id=client.id)
+    db.commit()
+    invalidate_cache("clients:", "dashboard:")
+
+
 @router.delete("/{client_id}", status_code=204)
 def delete_client(
     client_id: int,
@@ -190,7 +217,7 @@ def delete_client(
     actor: User = Depends(require_permission("clients.delete")),
 ):
     client = _load(db, client_id)
-    
+
     # Delete local folder on disk
     from pathlib import Path
     from app.config import settings
@@ -208,3 +235,4 @@ def delete_client(
                 
     db.delete(client)
     db.commit()
+    invalidate_cache("clients:", "dashboard:")

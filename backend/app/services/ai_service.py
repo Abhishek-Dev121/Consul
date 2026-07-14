@@ -10,94 +10,32 @@ never a restatement of what was said.
 """
 import json
 
-from app.config import settings
+from app.database import SessionLocal
+from app.services import ai_defaults, settings_service
 
 # Hard character budget per request. Documents in particular can be far longer,
 # so we keep the head and the tail rather than silently dropping the ending,
 # where conclusions, signatures and deadlines usually live.
 _MAX_CHARS = 24000
 
-_SHARED_RULES = (
-    "Rules:\n"
-    "- Ground every statement in the supplied text. Never invent names, dates, "
-    "prices or commitments. If something is unclear, say so in open_questions.\n"
-    "- Write for a teammate who must act, not for a reader who wants a recap. "
-    "Prefer specifics (who, what, when) over generalities.\n"
-    "- Every entry in pending_actions must be imperative and, where the text "
-    "supports it, name the owner and the due date, e.g. "
-    '"Ravi: send the revised SOW to Acme by Fri 14 Mar".\n'
-    "- If a fact is stated in the text, use its exact figure, date or name.\n"
-    "- Prefix each key_point with its kind: Decision:, Requirement:, Risk:, "
-    "Blocker:, Change:, or Context:.\n"
-    "- Return [] for any list with nothing to report. Do not pad.\n"
-    "- Respond ONLY with valid JSON. No prose outside the JSON."
-)
-
-_CONVO_SYSTEM = (
-    "You analyse client communication threads for a project delivery team.\n"
-    "Produce a briefing that lets a teammate pick up this client cold.\n\n"
-    "Return JSON matching this schema:\n"
-    "{\n"
-    '  "summary": string,             // 3-5 sentences: what this thread is about, '
-    "where it now stands, and what is blocking progress\n"
-    '  "key_points": [string],        // decisions, requirements, constraints, commitments\n'
-    '  "pending_actions": [string],   // outstanding work, owner + deadline when stated\n'
-    '  "follow_ups": [string],        // who must be contacted next, about what, by when\n'
-    '  "open_questions": [string],    // unresolved questions blocking the work\n'
-    '  "sentiment": "positive"|"neutral"|"negative",  // the CLIENT\'s satisfaction\n'
-    '  "sentiment_score": number,     // -1.0 .. 1.0\n'
-    '  "risk_level": "low"|"medium"|"high"  // risk to the account or delivery\n'
-    "}\n\n" + _SHARED_RULES
-)
-
-_DOC_SYSTEM = (
-    "You analyse a project document (contract, specification, requirements sheet, "
-    "proposal, report or shared link) for the team delivering the work.\n"
-    "Extract what the team is committed to and what could hurt them. This is a "
-    "DOCUMENT, not a conversation — do not describe it as a discussion.\n\n"
-    "Return JSON matching this schema:\n"
-    "{\n"
-    '  "summary": string,             // 3-5 sentences: the document\'s purpose, scope, '
-    "and its consequences for the team\n"
-    '  "key_points": [string],        // scope, deliverables, obligations, dates, '
-    "acceptance criteria, payment or legal terms\n"
-    '  "pending_actions": [string],   // what the team must do because of this document\n'
-    '  "follow_ups": [string],        // clarifications to request, approvals to chase\n'
-    '  "open_questions": [string],    // ambiguities, gaps, anything underspecified\n'
-    '  "sentiment": "positive"|"neutral"|"negative",  // how favourable the terms are '
-    "to the team\n"
-    '  "sentiment_score": number,     // -1.0 .. 1.0\n'
-    '  "risk_level": "low"|"medium"|"high"  // commercial or delivery risk\n'
-    "}\n\n" + _SHARED_RULES
-)
-
-_AUDIO_SYSTEM = (
-    "You analyse the transcript of a client call or voice note for a project "
-    "delivery team. The transcript comes from automatic speech recognition, so "
-    "expect mis-heard words; infer intent, but never invent facts.\n\n"
-    "Return JSON matching this schema:\n"
-    "{\n"
-    '  "summary": string,             // 3-5 sentences: why the call happened, what was '
-    "agreed, what is outstanding\n"
-    '  "key_points": [string],        // decisions, requirements, constraints, commitments\n'
-    '  "pending_actions": [string],   // agreed next steps, owner + deadline when stated\n'
-    '  "follow_ups": [string],        // who to contact next, about what, by when\n'
-    '  "open_questions": [string],    // unresolved questions raised on the call\n'
-    '  "sentiment": "positive"|"neutral"|"negative",  // the CLIENT\'s satisfaction\n'
-    '  "sentiment_score": number,     // -1.0 .. 1.0\n'
-    '  "risk_level": "low"|"medium"|"high",\n'
-    '  "behavioral_assessment": string  // 1-3 sentences on the speakers\' tone, '
-    "professionalism, engagement and any friction worth flagging\n"
-    "}\n\n" + _SHARED_RULES
-)
+def _ai_config(kind: str) -> tuple[str, str, str]:
+    """Read the live AI settings (prompt for `kind`, model, api key) from the DB,
+    falling back to env/built-in defaults. Read fresh each call so edits made in
+    the Integrations page take effect immediately, without a restart."""
+    with SessionLocal() as db:
+        return (
+            settings_service.ai_prompt(db, kind),
+            settings_service.ai_model(db),
+            settings_service.ai_api_key(db),
+        )
 
 
-def _client():
-    if not settings.openai_api_key:
+def _client(api_key: str):
+    if not api_key:
         raise RuntimeError("OPENAI_API_KEY is not configured.")
     from openai import OpenAI
 
-    return OpenAI(api_key=settings.openai_api_key)
+    return OpenAI(api_key=api_key)
 
 
 def _fit(text: str) -> str:
@@ -125,11 +63,11 @@ def _context_header(context: dict | None) -> str:
     return "CONTEXT (background, not content to summarise):\n" + "\n".join(lines) + "\n\n"
 
 
-def _chat_json(system_prompt: str, body: str, context: dict | None, label: str) -> dict:
-    client = _client()
+def _chat_json(system_prompt: str, body: str, context: dict | None, label: str, model: str, api_key: str) -> dict:
+    client = _client(api_key)
     user_content = f"{_context_header(context)}{label}:\n\n{_fit(body)}"
     resp = client.chat.completions.create(
-        model=settings.openai_model,
+        model=model,
         response_format={"type": "json_object"},
         temperature=0.2,
         messages=[
@@ -147,16 +85,19 @@ def _chat_json(system_prompt: str, body: str, context: dict | None, label: str) 
 
 
 def analyze_conversation(text: str, context: dict | None = None) -> dict:
-    return _normalize(_chat_json(_CONVO_SYSTEM, text, context, "CONVERSATION THREAD"))
+    prompt, model, api_key = _ai_config("conversation")
+    return _normalize(_chat_json(prompt, text, context, "CONVERSATION THREAD", model, api_key), model)
 
 
 def analyze_document(text: str, context: dict | None = None) -> dict:
-    return _normalize(_chat_json(_DOC_SYSTEM, text, context, "DOCUMENT CONTENTS"))
+    prompt, model, api_key = _ai_config("document")
+    return _normalize(_chat_json(prompt, text, context, "DOCUMENT CONTENTS", model, api_key), model)
 
 
 def analyze_transcript(transcript: str, context: dict | None = None) -> dict:
-    data = _chat_json(_AUDIO_SYSTEM, transcript, context, "CALL TRANSCRIPT")
-    out = _normalize(data)
+    prompt, model, api_key = _ai_config("audio")
+    data = _chat_json(prompt, transcript, context, "CALL TRANSCRIPT", model, api_key)
+    out = _normalize(data, model)
     ba = data.get("behavioral_assessment")
     out["behavioral_assessment"] = str(ba).strip() if ba else None
     return out
@@ -166,7 +107,7 @@ _VALID_SENTIMENT = {"positive", "neutral", "negative"}
 _VALID_RISK = {"low", "medium", "high"}
 
 
-def _normalize(data: dict) -> dict:
+def _normalize(data: dict, model: str) -> dict:
     """Defensive normalisation so the DB layer always gets the expected types."""
 
     def _list(v) -> list[str]:
@@ -222,5 +163,5 @@ def _normalize(data: dict) -> dict:
         "follow_ups": follow_ups,
         "sentiment": sentiment,
         "sentiment_score": score,
-        "model": settings.openai_model,
+        "model": model,
     }

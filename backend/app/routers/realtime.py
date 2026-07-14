@@ -11,6 +11,7 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.cache import invalidate_cache
 from app.database import get_db
 from app.deps import get_current_user
 from app.models.client import Client
@@ -46,6 +47,8 @@ def mark_read(client_id: int, db: Session = Depends(get_db), user: User = Depend
     else:
         db.add(ClientRead(client_id=client_id, user_id=user.id, last_read_at=now))
     db.commit()
+    # Clear the cached overview so this user's unread badge disappears on next poll.
+    invalidate_cache("clients:", "dashboard:")
 
 
 @router.post("/{client_id}/typing", status_code=204)

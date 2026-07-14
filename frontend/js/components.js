@@ -59,13 +59,30 @@ function Icon(name, opts = {}) {
   return `<svg${cls} width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="${sw}" stroke-linecap="round" stroke-linejoin="round" style="${style}${opts.style || ""}">${ICONS[name] || ""}</svg>`;
 }
 
+// Registry of user-defined platform types, keyed by slug → { name, logo }. Loaded
+// once per page (see loadPlatformTypes, called from renderLayout) so the channel
+// helpers below can render a custom platform's own name/logo/colour.
+var CUSTOM_PLATFORMS = {};
+async function loadPlatformTypes() {
+  try {
+    const list = await Api.get("/api/channels/platform-types");
+    const map = {};
+    (list || []).forEach((t) => { map[t.key] = { name: t.name, logo: t.logo }; });
+    CUSTOM_PLATFORMS = map;
+  } catch (_) { /* non-fatal: fall back to built-ins */ }
+}
+
 // Channel brand colors (for dots/icons) shared across views. Declared before the
 // glyph helper below, which resolves a channel's brand colour from here.
 const CHAN_COLORS = {
   whatsapp: "#25D366", upwork: "#108A00", slack: "#611F69",
   email: "#4A6CF7", telegram: "#229ED9", linkedin: "#0A66C2", other: "#8A94A6",
 };
-const chanColor = (p) => CHAN_COLORS[p] || CHAN_COLORS.other;
+// Custom platforms get a stable colour derived from their key, so each looks
+// distinct without needing a hand-picked brand colour.
+const _CUSTOM_PALETTE = ["#2E6BFF", "#9D4ED2", "#C2702A", "#1F9D6B", "#D2473D", "#3A8DDE", "#B0467E", "#0EA5A5"];
+function customColor(key) { let h = 0; for (const ch of (key || "")) h = (h * 31 + ch.charCodeAt(0)) % _CUSTOM_PALETTE.length; return _CUSTOM_PALETTE[h]; }
+const chanColor = (p) => CHAN_COLORS[p] || (CUSTOM_PLATFORMS[p] ? customColor(p) : CHAN_COLORS.other);
 
 // Recognisable brand glyphs per platform (filled, inherit colour via fill).
 // Simplified marks — not exact logo artwork — rendered in each platform's colour.
@@ -82,6 +99,12 @@ const PLATFORM_GLYPHS = {
 // A channel icon in its own brand colour. `mono` renders it in the current text
 // colour instead (e.g. on a coloured background).
 function channelIcon(platform, size = 14, mono = false) {
+  // Custom platform → render its uploaded logo. A white rounded backing keeps it
+  // legible on whatever coloured chip/circle it sits in.
+  const cp = CUSTOM_PLATFORMS[platform];
+  if (cp && cp.logo) {
+    return `<img src="${cp.logo}" alt="" width="${size}" height="${size}" style="width:${size}px;height:${size}px;border-radius:4px;object-fit:cover;background:#fff;vertical-align:-2px;flex:none" />`;
+  }
   const p = PLATFORM_GLYPHS[platform] ? platform : "other";
   const color = mono ? "currentColor" : chanColor(p);
   return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="${color}" style="vertical-align:-2px;flex:none">${PLATFORM_GLYPHS[p]}</svg>`;
@@ -97,10 +120,14 @@ const PLATFORM_META = {
   linkedin: { icon: channelIcon("linkedin", 16, true), tint: "tint-sky" },
   other:    { icon: channelIcon("other", 16, true),    tint: "tint-blue" },
 };
-function platformMeta(p) { return PLATFORM_META[p] || PLATFORM_META.other; }
+function platformMeta(p) {
+  if (CUSTOM_PLATFORMS[p]) return { icon: channelIcon(p, 16, true), tint: "tint-blue" };
+  return PLATFORM_META[p] || PLATFORM_META.other;
+}
 
-const platformName = (p) => ({ whatsapp: "WhatsApp", upwork: "Upwork", slack: "Slack",
-  email: "Email", telegram: "Telegram", linkedin: "LinkedIn", other: "Other" }[p] || "Other");
+const platformName = (p) => (CUSTOM_PLATFORMS[p] && CUSTOM_PLATFORMS[p].name)
+  || ({ whatsapp: "WhatsApp", upwork: "Upwork", slack: "Slack",
+        email: "Email", telegram: "Telegram", linkedin: "LinkedIn", other: "Other" }[p] || "Other");
 
 // Avatar box (colored by string hash) — matches reference .av
 const AV_PALETTE = ["#2E6BFF", "#5B6CE0", "#C2702A", "#9D4ED2", "#1F9D6B", "#D2473D", "#3A8DDE", "#B0467E"];

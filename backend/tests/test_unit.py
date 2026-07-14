@@ -71,11 +71,12 @@ def test_ai_normalize_coerces_types():
         "sentiment": "positive",
         "sentiment_score": "0.8",            # str -> float
     }
-    out = ai_service._normalize(raw)
+    out = ai_service._normalize(raw, "gpt-4o-mini")
     assert out["key_points"] == ["single point"]
     assert out["follow_ups"] == []
     assert out["pending_actions"] == ["do x", "do y"]
     assert out["sentiment_score"] == 0.8
+    assert out["model"] == "gpt-4o-mini"
 
 
 # ---------------------------------------------------------------- metrics

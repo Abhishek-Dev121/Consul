@@ -45,8 +45,13 @@ _COLUMN_PATCHES = [
     "ALTER TABLE messages ADD COLUMN IF NOT EXISTS is_deleted BOOLEAN NOT NULL DEFAULT FALSE",
     "ALTER TABLE messages ADD COLUMN IF NOT EXISTS reply_to_id INTEGER REFERENCES messages(id) ON DELETE SET NULL",
     "ALTER TABLE clients ADD COLUMN IF NOT EXISTS chat_cleared_at TIMESTAMPTZ",
+    "ALTER TABLE clients ADD COLUMN IF NOT EXISTS archived_at TIMESTAMPTZ",
     "ALTER TABLE files ADD COLUMN IF NOT EXISTS archived_at TIMESTAMPTZ",
     "ALTER TABLE audio_recordings ADD COLUMN IF NOT EXISTS archived_at TIMESTAMPTZ",
+    # Custom platform types: relax the channels.platform enum to a plain string so
+    # it can hold a PlatformType.key alongside the built-ins. Idempotent — running
+    # it when the column is already VARCHAR is a harmless no-op.
+    "ALTER TABLE channels ALTER COLUMN platform TYPE VARCHAR(64) USING platform::text",
 ]
 
 
@@ -81,11 +86,11 @@ def init_db() -> None:
         existing_channels = db.execute(select(Channel)).first()
         if existing_channels is None:
             db.add_all([
-                Channel(name="Main WhatsApp", platform=Platform.whatsapp, config={}),
-                Channel(name="Primary Upwork", platform=Platform.upwork, config={}),
-                Channel(name="Support Email", platform=Platform.email, config={}),
-                Channel(name="Slack Client Portal", platform=Platform.slack, config={}),
-                Channel(name="Telegram Support", platform=Platform.telegram, config={}),
+                Channel(name="Main WhatsApp", platform=Platform.whatsapp.value, config={}),
+                Channel(name="Primary Upwork", platform=Platform.upwork.value, config={}),
+                Channel(name="Support Email", platform=Platform.email.value, config={}),
+                Channel(name="Slack Client Portal", platform=Platform.slack.value, config={}),
+                Channel(name="Telegram Support", platform=Platform.telegram.value, config={}),
             ])
             db.commit()
 
@@ -124,6 +129,7 @@ ALL_PERMISSIONS = [
     ("users.permissions", "Edit Permissions", "Users", "Edit role permissions in matrix", [UserRole.super_admin]),
     ("activity.view", "View Activity Log", "Activity", "Access system audit/activity logs", [UserRole.super_admin, UserRole.admin, UserRole.team_lead]),
     ("bitrix.manage", "Manage Bitrix", "Bitrix", "Manage Bitrix24 portal connection settings", [UserRole.super_admin, UserRole.admin]),
+    ("integrations.manage", "Manage Integrations", "Integrations", "Manage third-party integrations and app settings", [UserRole.super_admin]),
 ]
 
 

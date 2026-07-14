@@ -54,6 +54,46 @@
     if (v.includes("archiv") || v.includes("inactive") || v.includes("closed")) return `<span class="st st-done"><span class="sd"></span>${esc(s)}</span>`;
     return `<span class="st st-active"><span class="sd"></span>${esc(s || "Active")}</span>`;
   }
+
+  // Client status is one of Active / Inactive / Lead, each with its own tint.
+  const STATUS_OPTIONS = [
+    { key: "active", label: "Active", cls: "st-active" },
+    { key: "inactive", label: "Inactive", cls: "st-done" },
+    { key: "lead", label: "Lead", cls: "st-hold" },
+  ];
+  function statusMeta(s) {
+    const v = (s || "").toLowerCase();
+    return STATUS_OPTIONS.find((o) => o.key === v)
+      || (v.includes("inactive") || v.includes("closed") || v.includes("archiv") ? STATUS_OPTIONS[1] : STATUS_OPTIONS[0]);
+  }
+
+  // A pill that doubles as a dropdown to change the client's status (writable roles).
+  function statusControl(s) {
+    const m = statusMeta(s);
+    const items = STATUS_OPTIONS.map((o) =>
+      `<button type="button" class="cd-status-item ${o.key === m.key ? "on" : ""}" data-status="${o.key}">
+         <span class="st ${o.cls}" style="pointer-events:none"><span class="sd"></span>${o.label}</span>
+         ${o.key === m.key ? Icon("check", { size: 14, style: "margin-left:auto;color:var(--brand)" }) : ""}
+       </button>`).join("");
+    return `<div class="cd-status" id="cd-status">
+      <button type="button" class="st ${m.cls} cd-status-btn" id="cd-status-btn" aria-haspopup="true" title="Change client status">
+        <span class="sd"></span>${m.label} ${Icon("chevronDown", { size: 13, style: "margin-left:2px" })}
+      </button>
+      <div class="cd-status-menu" id="cd-status-menu" hidden>${items}</div>
+    </div>`;
+  }
+
+  async function setClientStatus(newStatus) {
+    if ((client.status || "").toLowerCase() === newStatus) return;
+    const prev = client.status;
+    try {
+      const updated = await Api.patch(`/api/clients/${clientId}`, { status: newStatus });
+      client.status = updated.status || newStatus;
+      Api.invalidateCache("/api/overview/clients");   // dashboards show status too
+      renderHero();
+      toast("Client status updated", "success");
+    } catch (e) { client.status = prev; toast(e.message); }
+  }
   const chanChips = (list) => (list || []).map((c) =>
     `<span class="chip">${channelIcon(c.platform, 13)} ${esc(c.name)}</span>`).join("") || `<span class="muted small">None</span>`;
 
@@ -64,7 +104,7 @@
       <div class="cd-id">
         <h2 title="${esc(client.name)}">${esc(client.name)}</h2>
         <div class="cd-sub">
-          ${statusPill(client.status)}
+          ${writable ? statusControl(client.status) : statusPill(client.status)}
           ${client.company ? `<span class="cd-company">${esc(client.company)}</span>` : ""}
           ${primaryChannel ? `<span class="chip">${channelIcon(primaryChannel.platform, 13)} ${esc(primaryChannel.name)}</span>` : ""}
         </div>
@@ -74,6 +114,16 @@
           <span>${Icon("users", { size: 13 })} ${(client.assignees || []).length} assignee${(client.assignees || []).length === 1 ? "" : "s"}</span>
         </div>
       </div>`;
+
+    // Wire the status dropdown (writable roles only).
+    const stBtn = document.getElementById("cd-status-btn");
+    if (stBtn) {
+      const menu = document.getElementById("cd-status-menu");
+      stBtn.onclick = (e) => { e.stopPropagation(); menu.hidden = !menu.hidden; };
+      menu.querySelectorAll("[data-status]").forEach((b) =>
+        b.onclick = (e) => { e.stopPropagation(); menu.hidden = true; setClientStatus(b.dataset.status); });
+      document.addEventListener("click", () => { if (menu) menu.hidden = true; });
+    }
   }
 
   function renderInfo() {
@@ -204,8 +254,10 @@
     const projects = await Api.get(`/api/projects?client_id=${clientId}`);
     const body = document.getElementById("proj-body");
     
+    // A client can be linked to at most one project, so only offer the link
+    // button while none is linked yet.
     const head = `<div class="cd-sec-head"><h3>Linked projects <span class="muted small">(${projects.length})</span></h3>
-      ${writable ? `<button class="btn btn-soft btn-sm" onclick="openLinkProjectModal()">${Icon("plus", { size: 13 })} Link Bitrix24 project</button>` : ""}</div>`;
+      ${writable && !projects.length ? `<button class="btn btn-soft btn-sm" onclick="openLinkProjectModal()">${Icon("plus", { size: 13 })} Link Bitrix24 project</button>` : ""}</div>`;
 
     if (!projects.length) {
       body.innerHTML = head + `<div class="empty"><span class="em-ico">${Icon("folder", { size: 26 })}</span>No projects linked yet.${writable ? ' Use “Link Bitrix24 project” above.' : ""}</div>`;
@@ -213,17 +265,31 @@
     }
 
     const doneStatuses = ["done", "completed", "complete", "closed", "won", "5"];
+    // Bitrix returns numeric task-status codes (e.g. "5"); map them to readable
+    // labels so the pill never shows a bare digit.
+    const STATUS_LABELS = {
+      "1": "Pending", "2": "Pending", "3": "In progress",
+      "4": "In review", "5": "Complete", "6": "Deferred", "7": "Declined",
+    };
+    const taskStatusLabel = (s) => {
+      const raw = (s == null ? "" : String(s)).trim();
+      if (!raw) return "Pending";
+      if (STATUS_LABELS[raw]) return STATUS_LABELS[raw];
+      return raw.charAt(0).toUpperCase() + raw.slice(1);   // already text — tidy the case
+    };
     const taskPill = (s) => {
-      const v = (s || "").toLowerCase();
-      if (doneStatuses.includes(v)) return `<span class="st st-done"><span class="sd"></span>${esc(s || "Done")}</span>`;
-      if (v.includes("progress")) return `<span class="st st-progress"><span class="sd"></span>${esc(s)}</span>`;
-      return `<span class="st st-active"><span class="sd"></span>${esc(s || "Pending")}</span>`;
+      const v = (s == null ? "" : String(s)).toLowerCase().trim();
+      const label = taskStatusLabel(s);
+      const isDone = doneStatuses.includes(v) || label.toLowerCase() === "complete";
+      const isProgress = !isDone && (v === "3" || v === "4" || v.includes("progress") || v.includes("review"));
+      const cls = isDone ? "st-done" : isProgress ? "st-progress" : "st-active";
+      return `<span class="st ${cls}"><span class="sd"></span>${esc(label)}</span>`;
     };
     const prioChip = (p) => p === "2"
       ? `<span class="chip bad">Urgent</span>`
       : p === "1" ? `<span class="chip" style="background:var(--neu-soft);color:var(--neu)">High</span>` : `<span class="chip">Normal</span>`;
 
-    const cards = projects.map((p) => {
+    const cards = projects.map((p, pi) => {
       const total = p.tasks.length;
       const done = p.tasks.filter((t) => doneStatuses.includes((t.status || "").toLowerCase())).length;
       const prog = total > 0 ? Math.round((done / total) * 100) : 0;
@@ -232,9 +298,9 @@
         `<span class="chip" title="${esc(m.work_position || "Member")}">${avBox(m.name)} ${esc(m.name)}</span>`
       ).join("") || `<span class="muted small">No members synced</span>`;
 
-      const rows = p.tasks.map((t) => {
+      const rows = p.tasks.map((t, ti) => {
         const est = t.time_estimate ? `${Math.round(t.time_estimate / 3600)}h` : "—";
-        return `<tr>
+        return `<tr class="cd-task-row" data-pi="${pi}" data-ti="${ti}" title="View full task details">
           <td><div style="font-weight:600">${esc(t.title)}</div>
             ${t.description ? `<div class="cd-task-desc">${esc(t.description)}</div>` : ""}</td>
           <td>${esc(t.responsible_name || "Unassigned")}</td>
@@ -275,6 +341,51 @@
     }).join("");
 
     body.innerHTML = head + cards;
+
+    // Clicking a task row opens a popup with that task's full details — the table
+    // truncates long descriptions, so this is where you read the whole thing.
+    function openTaskModal(t, projectTitle) {
+      const old = document.getElementById("taskDetailModal");
+      if (old) old.remove();
+      const est = t.time_estimate ? `${Math.round(t.time_estimate / 3600)}h` : "—";
+      const deadline = t.due_date ? fmtDate(t.due_date) : "—";
+      document.body.insertAdjacentHTML("beforeend", `
+        <div class="modal fade" id="taskDetailModal" tabindex="-1">
+          <div class="modal-dialog modal-lg modal-dialog-centered modal-dialog-scrollable">
+            <div class="modal-content">
+              <div class="modal-header">
+                <h5 class="modal-title" style="font-size:1.05rem">${esc(t.title)}</h5>
+                <button class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+              </div>
+              <div class="modal-body">
+                <div class="task-meta-grid">
+                  <div><div class="tm-lab">Assignee</div><div>${esc(t.responsible_name || "Unassigned")}</div></div>
+                  <div><div class="tm-lab">Status</div><div>${taskPill(t.status)}</div></div>
+                  <div><div class="tm-lab">Priority</div><div>${prioChip(t.priority)}</div></div>
+                  <div><div class="tm-lab">Estimate</div><div>${esc(est)}</div></div>
+                  <div><div class="tm-lab">Deadline</div><div>${esc(deadline)}</div></div>
+                  ${projectTitle ? `<div><div class="tm-lab">Project</div><div>${esc(projectTitle)}</div></div>` : ""}
+                </div>
+                <div class="tm-lab" style="margin-top:18px">Description</div>
+                <div class="task-desc-full">${t.description ? esc(t.description) : `<span class="muted">No description provided.</span>`}</div>
+              </div>
+              <div class="modal-footer">
+                <button class="btn btn-light" data-bs-dismiss="modal">Close</button>
+              </div>
+            </div>
+          </div>
+        </div>`);
+      const el = document.getElementById("taskDetailModal");
+      el.addEventListener("hidden.bs.modal", () => el.remove());
+      bootstrap.Modal.getOrCreateInstance(el).show();
+    }
+
+    body.querySelectorAll(".cd-task-row").forEach((tr) =>
+      tr.addEventListener("click", () => {
+        const p = projects[+tr.dataset.pi];
+        const t = p && p.tasks[+tr.dataset.ti];
+        if (t) openTaskModal(t, p.title);
+      }));
   }
 
   window.openLinkProjectModal = async () => {
@@ -305,7 +416,16 @@
   };
 
   window.unlinkProject = async (id) => {
-    if (!confirm("Are you sure you want to unlink this project? This does not delete the group in Bitrix24.")) return;
+    const ok = await confirmDialog(
+      "This removes the project link from this client. You can link a project again afterwards.",
+      {
+        title: "Unlink this project?",
+        confirmText: "Unlink project",
+        icon: "trash",
+        note: "This does not delete the group in Bitrix24.",
+      }
+    );
+    if (!ok) return;
     try {
       await Api.del(`/api/bitrix/link-project/${id}`);
       toast("Project unlinked", "success");
@@ -492,9 +612,13 @@
   };
 
   window.deleteDocument = async (id) => {
-    if (!confirm("Are you sure you want to delete this file? This will remove it from the disk permanently.")) return;
+    const ok = await confirmDialog(
+      "This permanently removes the file from the server. This can't be undone.",
+      { title: "Delete this file?", confirmText: "Delete file", icon: "trash" }
+    );
+    if (!ok) return;
     try {
-      await Api.delete(`/api/files/${id}`);
+      await Api.del(`/api/files/${id}`);
       toast("File deleted", "success");
       await loadFiles();
     } catch (e) {
@@ -823,6 +947,15 @@
   });
 
   await loadClient();
+
+  // If arriving via ?tab=, open that tab (e.g. the Documents page "open location"
+  // button links here with ?tab=files).
+  const wantTab = (qs("tab") || "").toLowerCase();
+  const TAB_TARGETS = { conv: "#tab-conv", media: "#tab-media", proj: "#tab-proj", files: "#tab-files", audio: "#tab-audio", activity: "#tab-activity" };
+  if (wantTab && TAB_TARGETS[wantTab]) {
+    const tabBtn = document.querySelector(`[data-bs-target="${TAB_TARGETS[wantTab]}"]`);
+    if (tabBtn) new bootstrap.Tab(tabBtn).show();
+  }
 
   // If arriving via ?conv=, jump straight to that conversation.
   const convId = qs("conv");

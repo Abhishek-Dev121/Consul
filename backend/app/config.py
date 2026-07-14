@@ -74,8 +74,8 @@ class Settings(BaseSettings):
     # Seconds between DB keep-alive pings (prevents serverless-Postgres cold starts).
     # Set to 0 to disable (e.g. to conserve Neon free-tier compute hours).
     db_keepalive_seconds: int = 240
-    # Enable SQLAlchemy pool pre-ping (runs SELECT 1 on checkout). Disable for low latency.
-    db_pool_pre_ping: bool = False
+    # Enable SQLAlchemy pool pre-ping (runs SELECT 1 on checkout) to resist drops.
+    db_pool_pre_ping: bool = True
 
     # --- Initial super admin (seeded on first run) ---
     first_superadmin_email: str = "admin@devexhub.com"
