@@ -255,6 +255,7 @@
 
   // Message pagination state (cursor-based scroll-back).
   const PAGE_LIMIT = 50;
+  const threadCache = {};       // clientId -> last-loaded messages, for instant re-open
   let loadedMsgs = [];          // full set currently in view (oldest → newest, deduped by id)
   let hasMoreOlder = false;     // is there an older page to load?
   let loadingOlder = false;     // guard against concurrent scroll-loads
@@ -304,8 +305,39 @@
 
   function stopPresence() { if (presenceTimer) { clearInterval(presenceTimer); presenceTimer = null; } }
 
+  // ── Live push (WebSocket) — additive; polling below is the fallback ──
+  let ws = null, wsConnected = false, wsBackoff = 1000, wsClosed = false;
+  function connectWS() {
+    if (wsClosed) return;
+    const token = Api.token();
+    if (!token) return;
+    try {
+      const base = (typeof BASE_URL !== "undefined" && BASE_URL) ? BASE_URL : location.origin;
+      ws = new WebSocket(base.replace(/^http/i, "ws") + "/api/ws?token=" + encodeURIComponent(token));
+      ws.onopen = () => { wsConnected = true; wsBackoff = 1000; };
+      ws.onmessage = (ev) => {
+        let evt; try { evt = JSON.parse(ev.data); } catch (_) { return; }
+        if (evt && evt.type === "message") {
+          // A new/edited/deleted message somewhere — refresh the open thread if
+          // it's the affected client, and the list ordering/unread for everyone.
+          if (active != null && evt.client_id === active) refreshMessagesIfChanged(active);
+          refreshList();
+        }
+      };
+      ws.onerror = () => { try { ws.close(); } catch (_) {} };
+      ws.onclose = () => {
+        wsConnected = false;
+        if (!wsClosed) { setTimeout(connectWS, wsBackoff); wsBackoff = Math.min(wsBackoff * 2, 30000); }
+      };
+    } catch (_) {
+      wsConnected = false;
+      setTimeout(connectWS, wsBackoff); wsBackoff = Math.min(wsBackoff * 2, 30000);
+    }
+  }
+
   function startPresence(clientId) {
     stopPresence();
+    let tick = 0;
     const poll = async () => {
       if (active !== clientId) { stopPresence(); return; }
       try {
@@ -313,9 +345,9 @@
         updateTyping(p.typing || []);
         updateOnline(p.online_user_ids || []);
       } catch (_) {}
-      // Pull new messages on the same cadence so incoming messages appear
-      // near-instantly instead of only when the thread is re-opened.
-      refreshMessagesIfChanged(clientId);
+      // With WS connected, new messages arrive via push — so the poll only pulls
+      // messages as a slow safety net (~every 15s). Without WS it stays at 3s.
+      if (!wsConnected || (++tick % 5 === 0)) refreshMessagesIfChanged(clientId);
     };
     poll();
     presenceTimer = setInterval(poll, 3000);
@@ -556,16 +588,37 @@
       renderReplyBar();  // restore the reply preview if one is active
     }
 
-    // Load the latest page fresh (never stale) so a send / delete / incoming
-    // message appears at once. Older pages load on scroll-up.
+    const targetId = cl.id;
+    loadingOlder = false;
+    const bodyEl = document.getElementById("th2-body");
+
+    // Instant paint: if we've seen this chat before, show its cached messages at
+    // once (correct client, no blank flash), then revalidate below. Otherwise
+    // clear the previous chat's messages so they never linger while loading.
+    const cached = threadCache[targetId];
+    if (cached && cached.length) {
+      loadedMsgs = cached;
+      hasMoreOlder = cached.length >= PAGE_LIMIT;
+      threadSig = sigOf(cached);
+      paintMessages(cached, false);
+    } else {
+      loadedMsgs = [];
+      hasMoreOlder = false;
+      threadSig = "";
+      if (bodyEl) bodyEl.innerHTML = "";
+    }
+
+    // Revalidate against the server. Discard the response if we've since switched
+    // chats, and only repaint when it actually differs from what's shown.
     try {
-      const msgs = await Api.get(`/api/clients/${cl.id}/messages?limit=${PAGE_LIMIT}`, { stale: false });
+      const msgs = await Api.get(`/api/clients/${targetId}/messages?limit=${PAGE_LIMIT}`, { stale: false });
+      if (active !== targetId) return;   // switched chats mid-fetch — discard
+      threadCache[targetId] = msgs;
       loadedMsgs = msgs;
       hasMoreOlder = msgs.length >= PAGE_LIMIT;
-      loadingOlder = false;
-      threadSig = sigOf(loadedMsgs);
-      paintMessages(loadedMsgs, false);
-    } catch (e) { toast(e.message); }
+      const sig = sigOf(msgs);
+      if (sig !== threadSig) { threadSig = sig; paintMessages(msgs, true); }
+    } catch (e) { if (active === targetId && !(cached && cached.length)) toast(e.message); }
   }
 
   // A lightweight fingerprint of the message set — id + read/edited/deleted flags.
@@ -590,6 +643,7 @@
     if (sig === threadSig) return;                   // nothing new
     threadSig = sig;
     loadedMsgs = merged;
+    threadCache[clientId] = merged;   // keep the cache warm for instant re-open
     paintMessages(loadedMsgs, true);
     // The thread is open and on-screen, so anything that just arrived is "seen" —
     // advance the read marker so this chat's badge stays cleared, then refresh the
@@ -1653,11 +1707,12 @@
     renderArchiveToggle(); renderFilter(); renderList();
     const first = (preselect && clients.find((c) => c.id === preselect)) ? preselect : (clients[0] && clients[0].id);
     if (first) selectClient(first);
-    // WhatsApp-style live list: poll for new messages / reordering / unread badges
-    // so the list updates without a manual page refresh, even for chats that
-    // aren't currently open. The signature guard keeps it from re-rendering when
-    // nothing has changed. Refresh at once when the tab regains focus.
-    listTimer = setInterval(refreshList, 5000);
+    // Open the live-push socket (falls back to polling if it can't connect).
+    connectWS();
+    // WhatsApp-style live list: poll for new messages / reordering / unread badges.
+    // When WS is connected this is just a slow safety net (~20s); without it, 5s.
+    let listTick = 0;
+    listTimer = setInterval(() => { if (!wsConnected || (++listTick % 4 === 0)) refreshList(); }, 5000);
     document.addEventListener("visibilitychange", () => { if (!document.hidden) refreshList(); });
   } catch (e) { toast(e.message); }
 })();

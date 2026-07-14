@@ -19,6 +19,7 @@ from app.models.user import User, UserRole
 from app.rbac import ensure_can_write, ensure_client_access, has_min_role, require_permission
 from app.schemas.message import MessageCreate, MessageEdit, MessageListOut, MessageOut
 from app.services import chat_service, storage_service
+from app.services.ws_manager import notify as ws_notify
 from app.services.activity_service import log_activity
 
 # WhatsApp-style: a sender can edit/delete their own message within this window.
@@ -371,6 +372,7 @@ def send_message(
     # The chat list orders by activity and shows unread badges — refresh it so the
     # sender's chat jumps to the top for everyone on their next poll.
     invalidate_cache("clients:", "dashboard:")
+    ws_notify({"type": "message", "client_id": client.id, "action": "new"})
     msg.mine = True
     return msg
 
@@ -435,6 +437,7 @@ async def send_attachment(
     db.commit()
     db.refresh(msg)
     invalidate_cache("clients:", "dashboard:")
+    ws_notify({"type": "message", "client_id": client.id, "action": "new"})
     msg.mine = True
     return msg
 
@@ -520,6 +523,7 @@ def edit_message(
     msg.edited_at = datetime.now(timezone.utc)
     db.commit()
     db.refresh(msg)
+    ws_notify({"type": "message", "client_id": client_id, "action": "edit"})
     msg.mine, msg.edited = True, True
     return msg
 
@@ -534,6 +538,7 @@ def delete_message(
     msg = _own_recent_message(db, client_id, message_id, actor)
     msg.is_deleted = True
     db.commit()
+    ws_notify({"type": "message", "client_id": client_id, "action": "delete"})
 
 
 @router.post("/{client_id}/messages/{message_id}/hide", status_code=204)

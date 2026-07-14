@@ -11,9 +11,6 @@ const ClientEditModal = (function () {
       <div class="modal-header"><h5 class="modal-title">Edit client</h5><button class="btn-close" data-bs-dismiss="modal"></button></div>
       <div class="modal-body"><div class="row g-3">
         <div class="col-md-6"><label class="form-label">Name <span class="req">*</span></label><input class="form-control" id="ce-name" /></div>
-        <div class="col-md-6"><label class="form-label">Company</label><input class="form-control" id="ce-company" /></div>
-        <div class="col-md-6"><label class="form-label">Email</label><input type="email" class="form-control" id="ce-email" /></div>
-        <div class="col-md-6"><label class="form-label">Phone</label><input class="form-control" id="ce-phone" /></div>
         <div class="col-md-6"><label class="form-label">Status</label>
           <select class="form-select" id="ce-status"><option value="active">Active</option>
             <option value="inactive">Inactive</option><option value="lead">Lead</option></select></div>
@@ -126,9 +123,6 @@ const ClientEditModal = (function () {
     currentId = client.id;
     onSavedCb = onSaved;
     document.getElementById("ce-name").value = client.name || "";
-    document.getElementById("ce-company").value = client.company || "";
-    document.getElementById("ce-email").value = client.email || "";
-    document.getElementById("ce-phone").value = client.phone || "";
     document.getElementById("ce-status").value = client.status || "active";
     document.getElementById("ce-notes").value = client.notes || "";
 
@@ -162,9 +156,6 @@ const ClientEditModal = (function () {
     const channel = document.getElementById("ce-channel").value;
     const payload = {
       name: document.getElementById("ce-name").value.trim(),
-      company: document.getElementById("ce-company").value.trim() || null,
-      email: document.getElementById("ce-email").value.trim() || null,
-      phone: document.getElementById("ce-phone").value.trim() || null,
       status: document.getElementById("ce-status").value,
       notes: document.getElementById("ce-notes").value.trim() || null,
       channel_ids: channel ? [parseInt(channel)] : [],
