@@ -103,6 +103,47 @@ def analyze_transcript(transcript: str, context: dict | None = None) -> dict:
     return out
 
 
+_ASSISTANT_SYSTEM = (
+    "You are Consul's AI assistant, helping an internal team member understand ONE "
+    "specific client. You can answer questions about that client's conversations, their "
+    "linked projects, and the tasks under those projects — including task status, owners, "
+    "due dates and updates.\n\n"
+    "Rules:\n"
+    "- Use ONLY the CLIENT CONTEXT provided. If the answer isn't in it, say you don't have "
+    "that information for this client rather than guessing.\n"
+    "- Be concise and specific. Use short bullet points when listing tasks or actions.\n"
+    "- Include owners and dates when they are known.\n"
+    "- You are talking to internal staff, not the client."
+)
+
+
+def chat_assistant(question: str, context: str, history: list[dict] | None = None) -> str:
+    """Conversational Q&A over a single client's context (conversations + projects/
+    tasks). Returns a plain-text answer. Separate from the JSON analysis path."""
+    with SessionLocal() as db:
+        model = settings_service.ai_model(db)
+        api_key = settings_service.ai_api_key(db)
+    client = _client(api_key)
+
+    messages = [
+        {"role": "system", "content": _ASSISTANT_SYSTEM},
+        {"role": "system", "content": "CLIENT CONTEXT:\n\n" + _fit(context)},
+    ]
+    # Keep only the last few turns to bound token cost.
+    for h in (history or [])[-8:]:
+        role = "assistant" if (h.get("role") == "assistant") else "user"
+        content = str(h.get("content") or "").strip()
+        if content:
+            messages.append({"role": role, "content": content[:2000]})
+    messages.append({"role": "user", "content": question.strip()[:2000]})
+
+    resp = client.chat.completions.create(model=model, temperature=0.3, messages=messages)
+    answer = (resp.choices[0].message.content or "").strip()
+    if not answer:
+        raise RuntimeError("The AI returned an empty response. Try again.")
+    return answer
+
+
 _VALID_SENTIMENT = {"positive", "neutral", "negative"}
 _VALID_RISK = {"low", "medium", "high"}
 

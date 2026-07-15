@@ -1,18 +1,41 @@
 (async function () {
-  const actions = `<button class="btn btn-primary" id="new-btn" data-bs-toggle="modal" data-bs-target="#clientModal">+ New client</button>`;
-  await renderLayout("/clients", "Clients", { crumb: "Manually managed client directory", actions });
+  const actions = `
+    <div id="chan-filter" style="display:flex"></div>
+    <div class="client-search">
+      <input class="form-control form-control-sm" id="client-name-filter" placeholder="All Clients — search by name…"
+             autocomplete="off" role="combobox" aria-expanded="false" aria-controls="client-name-menu" aria-label="Filter clients by name" />
+      <div class="client-search-menu" id="client-name-menu" hidden></div>
+    </div>
+    <button class="btn btn-primary" id="new-btn" data-bs-toggle="modal" data-bs-target="#clientModal">+ New client</button>`;
+  await renderLayout("/clients", "Clients", { crumb: "Manually managed client directory", hideSearch: true, actions });
   if (!canWrite()) { const b = document.getElementById("new-btn"); if (b) b.remove(); }
 
-  const FILTERS = ["all", "whatsapp", "upwork", "slack", "email", "telegram", "linkedin"];
-  let clients = [], chanFilter = "all";
+  // Built-in platforms always appear; any custom platform (from a client's
+  // channels or a created platform type) is appended so a newly-added channel
+  // shows up automatically instead of being missing.
+  const BUILTIN_CHANNELS = ["whatsapp", "upwork", "slack", "email", "telegram", "linkedin"];
+  let clients = [], chanFilter = "all", nameFilter = "";
 
-  // ---- filter bar ----
+  function channelFilterKeys() {
+    const keys = [...BUILTIN_CHANNELS];
+    const seen = new Set(keys);
+    const add = (p) => { if (p && !seen.has(p)) { seen.add(p); keys.push(p); } };
+    clients.forEach((c) => (c.channels || []).forEach((ch) => add(ch.platform)));
+    if (typeof CUSTOM_PLATFORMS === "object" && CUSTOM_PLATFORMS) Object.keys(CUSTOM_PLATFORMS).forEach(add);
+    return ["all", ...keys];
+  }
+
+  // ---- filter bar (a dropdown of All Channels + every platform) ----
   function renderFilter() {
-    document.getElementById("chan-filter").innerHTML = FILTERS.map((f) =>
-      `<button class="chip ${f === chanFilter ? "info" : ""}" data-f="${f}" style="cursor:pointer">
-        ${f === "all" ? "All channels" : `<span class="dot" style="background:${chanColor(f)}"></span>${platformName(f)}`}</button>`).join("");
-    document.querySelectorAll("#chan-filter [data-f]").forEach((el) =>
-      el.addEventListener("click", () => { chanFilter = el.dataset.f; renderFilter(); renderGrid(); }));
+    const keys = channelFilterKeys();
+    const wrap = document.getElementById("chan-filter");
+    wrap.innerHTML = `<select class="form-select form-select-sm" id="chan-filter-select"
+        aria-label="Filter clients by channel" style="width:auto;min-width:190px">
+      ${keys.map((f) => `<option value="${f}" ${f === chanFilter ? "selected" : ""}>${f === "all" ? "All channels" : esc(platformName(f))}</option>`).join("")}
+    </select>`;
+    document.getElementById("chan-filter-select").addEventListener("change", (e) => {
+      chanFilter = e.target.value; page = 1; renderGrid();
+    });
   }
 
   function card(c) {
@@ -34,10 +57,56 @@
   }
 
   let page = 1;
-  const pageSize = 10;
+  const pageSize = 21;
+
+  // "All Clients" searchable name filter — a custom dropdown (the native
+  // <datalist> rendered unstyled and overflowed the page). Typing filters the
+  // grid live and narrows the suggestion list; picking a name selects it.
+  function renderNameFilter() {
+    const input = document.getElementById("client-name-filter");
+    const menu = document.getElementById("client-name-menu");
+    if (!input || !menu) return;
+
+    const allNames = [...new Set(clients.map((c) => c.name))].sort((a, b) => a.localeCompare(b));
+
+    const paintMenu = (q) => {
+      const needle = q.trim().toLowerCase();
+      const matches = (needle ? allNames.filter((n) => n.toLowerCase().includes(needle)) : allNames);
+      menu.innerHTML = matches.length
+        ? matches.map((n) => `<button type="button" class="csi" data-name="${esc(n)}">${esc(n)}</button>`).join("")
+        : `<div class="csi-empty">No clients match.</div>`;
+      menu.querySelectorAll(".csi").forEach((b) =>
+        b.addEventListener("mousedown", (e) => {   // mousedown fires before input blur
+          e.preventDefault();
+          input.value = b.dataset.name;
+          nameFilter = b.dataset.name.toLowerCase();
+          page = 1;
+          hideMenu();
+          renderGrid();
+        }));
+    };
+    const showMenu = () => { paintMenu(input.value); menu.hidden = false; input.setAttribute("aria-expanded", "true"); };
+    const hideMenu = () => { menu.hidden = true; input.setAttribute("aria-expanded", "false"); };
+
+    if (!input.dataset.wired) {
+      input.dataset.wired = "1";
+      input.addEventListener("input", () => {
+        nameFilter = input.value.trim().toLowerCase();
+        page = 1;
+        renderGrid();
+        showMenu();
+      });
+      input.addEventListener("focus", showMenu);
+      document.addEventListener("click", (e) => {
+        if (!e.target.closest(".client-search")) hideMenu();
+      });
+    }
+  }
 
   function renderGrid() {
-    const list = clients.filter((c) => chanFilter === "all" || c.channels.some((ch) => ch.platform === chanFilter));
+    const list = clients.filter((c) =>
+      (chanFilter === "all" || c.channels.some((ch) => ch.platform === chanFilter)) &&
+      (nameFilter === "" || c.name.toLowerCase().includes(nameFilter)));
     const totalPages = Math.ceil(list.length / pageSize) || 1;
     if (page > totalPages) page = totalPages;
     const paginated = list.slice((page - 1) * pageSize, page * pageSize);
@@ -67,10 +136,12 @@
     if (nextBtn) nextBtn.addEventListener("click", () => { page++; renderGrid(); });
   }
 
-  async function load() { 
-    clients = await Api.get("/api/overview/clients"); 
+  async function load() {
+    clients = await Api.get("/api/overview/clients");
     page = 1;
-    renderGrid(); 
+    renderFilter();      // re-render now that we know which platforms clients use
+    renderNameFilter();
+    renderGrid();
   }
 
   // ---- drawer ----

@@ -20,7 +20,6 @@ const NAV = [
     { href: "/channels", label: "Channels", icon: "rss", perm: "channels.view" },
     { href: "/users", label: "Users & Roles", icon: "shield", perm: "users.view" },
     { href: "/activity", label: "Activity Log", icon: "scroll", perm: "activity.view" },
-    { href: "/bitrix", label: "Bitrix24", icon: "link", perm: "bitrix.manage" },
     { href: "/integrations", label: "Integrations", icon: "sparkles", perm: "integrations.manage" },
   ]},
 ];

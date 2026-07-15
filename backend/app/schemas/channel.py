@@ -9,6 +9,12 @@ class ChannelCreate(BaseModel):
     config: dict = {}
 
 
+class ChannelUpdate(BaseModel):
+    name: str | None = None
+    platform: str | None = None
+    config: dict | None = None
+
+
 class ChannelOut(ORMModel):
     id: int
     name: str

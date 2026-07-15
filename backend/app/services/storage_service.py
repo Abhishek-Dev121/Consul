@@ -60,7 +60,7 @@ def save_bytes(data: bytes, filename: str, prefix: str = "files") -> str:
             except Exception:
                 break
         s3.put_object(Bucket=settings.s3_bucket, Key=key, Body=data)
-    else:
+    elif settings.storage_backend == "local":
         while True:
             dest = Path(settings.local_storage_dir) / key
             if not dest.exists():
@@ -69,6 +69,8 @@ def save_bytes(data: bytes, filename: str, prefix: str = "files") -> str:
             counter += 1
         dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_bytes(data)
+    # If backend is "db", we just generate and return the unique key. The caller 
+    # is responsible for actually persisting `data` to the Postgres database.
     return key
 
 

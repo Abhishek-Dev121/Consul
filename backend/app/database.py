@@ -15,7 +15,7 @@ if not settings.database_url:
 
 # Postgres gets real JSONB; SQLite (tests) falls back to plain JSON, which it can
 # actually render. Without the variant, create_all() blows up under SQLite.
-JSONColumn = JSONB().with_variant(JSON(), "sqlite")
+JSONColumn = JSONB()
 
 engine = create_engine(
     settings.database_url,

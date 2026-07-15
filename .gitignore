@@ -19,3 +19,5 @@ backend/test*.db
 # database dumps must not be committed
 *.dump
 cca_backup.dump
+project_client_map.csv
+project_clients.csv

@@ -9,7 +9,19 @@
   const tbSearch = document.querySelector(".tb-search");
   if (tbSearch) tbSearch.style.display = "none";
 
-  const FILTERS = ["all", "whatsapp", "upwork", "slack", "email", "telegram", "linkedin"];
+  // Built-in platforms are always shown; any other platform is appended
+  // dynamically from the channels that actually exist (plus custom platform
+  // types), so a newly created channel's platform gets its own filter chip
+  // automatically instead of being missing.
+  const BUILTIN_FILTERS = ["whatsapp", "upwork", "slack", "email", "telegram", "linkedin"];
+  function computeFilters() {
+    const keys = [...BUILTIN_FILTERS];
+    const seen = new Set(keys);
+    const add = (p) => { if (p && !seen.has(p)) { seen.add(p); keys.push(p); } };
+    channels.forEach((ch) => add(ch.platform));
+    if (typeof CUSTOM_PLATFORMS === "object" && CUSTOM_PLATFORMS) Object.keys(CUSTOM_PLATFORMS).forEach(add);
+    return ["all", ...keys];
+  }
   let clients = [], channels = [], active = null, chanFilter = "all", searchQ = "", view = "active";
   const preselect = parseInt(qs("client")) || null;
   const canPurge = isAdmin();
@@ -17,6 +29,19 @@
 
   const platOf = (cl) => (cl.channels && cl.channels[0] && cl.channels[0].platform) || "other";
   const _ns = (s) => (!s ? "neu" : s.toLowerCase().includes("pos") ? "pos" : s.toLowerCase().includes("neg") ? "neg" : "neu");
+
+  // Turn a raw duration in seconds into plain English (e.g. "14 hr 9 min",
+  // "6 days") so non-technical users aren't shown "848.73m" / "500555s".
+  function humanizeDuration(totalSeconds) {
+    const s = Math.max(0, Math.round(totalSeconds || 0));
+    if (s < 60) return `${s} sec`;
+    const mins = Math.round(s / 60);
+    if (mins < 60) return `${mins} min`;
+    const h = Math.floor(mins / 60), mm = mins % 60;
+    if (h < 24) return mm ? `${h} hr ${mm} min` : `${h} hr`;
+    const d = Math.floor(h / 24), hh = h % 24;
+    return hh ? `${d} day${d > 1 ? "s" : ""} ${hh} hr` : `${d} day${d > 1 ? "s" : ""}`;
+  }
 
   // Colour the file-attachment badge by type so a PDF/sheet/doc is recognisable at a glance.
   function fileIcColor(ext) {
@@ -143,7 +168,7 @@
   }
 
   function renderFilter() {
-    document.getElementById("cl-filter").innerHTML = FILTERS.map((f) =>
+    document.getElementById("cl-filter").innerHTML = computeFilters().map((f) =>
       `<button class="f-chip ${f === chanFilter ? "active" : ""}" data-f="${f}">${f === "all" ? "All" : platformName(f)}</button>`
     ).join("");
     document.querySelectorAll("#cl-filter .f-chip").forEach((el) =>
@@ -191,7 +216,6 @@
           </span>
           <div class="ci2-body">
             <div class="ci2-row1"><span class="name">${esc(cl.name)}</span></div>
-            <div class="ci2-prev">${esc(cl.company || cl.email || "—")}</div>
             <div class="arch-actions">
               <button class="btn-restore" data-act="restore" data-id="${cl.id}">${Icon("restore", { size: 14 })} Restore</button>
               ${canPurge ? `<button class="btn-purge" data-act="purge" data-id="${cl.id}" title="Delete permanently">${Icon("trash", { size: 13 })} Delete</button>` : ""}
@@ -216,7 +240,6 @@
             <span class="name">${esc(cl.name)}</span>
             ${unreadBadge}
           </div>
-          <div class="ci2-prev">${esc(cl.company || cl.email || "—")}</div>
           <div class="ci2-foot">
             ${sentPill(cl.sentiment)}
             <span class="ch-pill" style="background:${chanColor(plat)}18;color:${chanColor(plat)}">
@@ -339,7 +362,6 @@
 
   function startPresence(clientId) {
     stopPresence();
-    let tick = 0;
     const poll = async () => {
       if (active !== clientId) { stopPresence(); return; }
       try {
@@ -347,9 +369,13 @@
         updateTyping(p.typing || []);
         updateOnline(p.online_user_ids || []);
       } catch (_) {}
-      // With WS connected, new messages arrive via push — so the poll only pulls
-      // messages as a slow safety net (~every 15s). Without WS it stays at 3s.
-      if (!wsConnected || (++tick % 5 === 0)) refreshMessagesIfChanged(clientId);
+      // Always pull new messages for the OPEN thread every 3s. WebSocket push makes
+      // it instant when it works, but it can't be relied on cross-user (single-
+      // process manager; multi-worker/proxied deployments drop cross-socket events),
+      // so this steady poll guarantees the other person sees a new message within
+      // ~3s without refreshing. refreshMessagesIfChanged only repaints when the
+      // message set actually changed, so an unchanged poll is cheap.
+      refreshMessagesIfChanged(clientId);
     };
     poll();
     presenceTimer = setInterval(poll, 3000);
@@ -1508,8 +1534,9 @@
       panel.classList.remove("collapsed");
       panel.style.width = "";
       toggleBtn.classList.remove("show");
-      // Lazily fetch the analysis the first time it's opened for this client.
-      if (active && aiRenderedFor !== active) renderAI();
+      // Lazily load the active tab's content when the panel is opened.
+      if (aiTab === "chat") syncAiChat();
+      else if (active && aiRenderedFor !== active) renderAI();
     } else {
       panel.classList.add("collapsed");
       toggleBtn.classList.add("show");
@@ -1519,6 +1546,101 @@
   document.getElementById("ai-close-btn").addEventListener("click", () => setAiPanelOpen(false));
   document.getElementById("ai-toggle-btn").addEventListener("click", () => setAiPanelOpen(true));
   setAiPanelOpen(false);   // start collapsed with the "AI" tab showing
+
+  // ─── AI panel tabs: Analysis (existing) + Chat (Admin/Super Admin Q&A) ───
+  const aiCanChat = isAdmin();          // Admin + Super Admin only
+  let aiTab = "analysis";
+  let aiChatFor = null;                 // client id the chat thread belongs to
+  const aiChatHistory = [];             // [{role, content}] for the open client
+  let aiChatBusy = false;
+
+  if (aiCanChat) { const t = document.getElementById("ai-tab-chat"); if (t) t.hidden = false; }
+
+  function setAiTab(tab) {
+    if (tab === "chat" && !aiCanChat) return;
+    aiTab = tab;
+    document.querySelectorAll("#ai-tabs .ai-tab").forEach((b) => b.classList.toggle("on", b.dataset.tab === tab));
+    document.getElementById("ai-scroll").hidden = tab !== "analysis";
+    document.getElementById("ai-chat").hidden = tab !== "chat";
+    document.getElementById("ai-model-sub").textContent =
+      tab === "chat" ? "Ask about tasks, projects & chats" : "OpenAI · summary & sentiment";
+    if (tab === "chat") syncAiChat();
+  }
+  document.querySelectorAll("#ai-tabs .ai-tab").forEach((b) =>
+    b.addEventListener("click", () => setAiTab(b.dataset.tab)));
+
+  // Keep the chat thread tied to the open client; reset when it changes.
+  function syncAiChat() {
+    if (!aiCanChat) return;
+    if (aiChatFor !== active) { aiChatFor = active; aiChatHistory.length = 0; }
+    renderAiChat();
+  }
+
+  function aiChatBubble(role, text, pending) {
+    const cls = role === "assistant" ? "aic-ai" : "aic-me";
+    const inner = pending
+      ? '<span class="aic-dots"><span></span><span></span><span></span></span>'
+      : esc(text).replace(/\n/g, "<br>");
+    return `<div class="aic-msg ${cls}">${inner}</div>`;
+  }
+
+  function renderAiChat() {
+    const thread = document.getElementById("ai-chat-thread");
+    if (!thread) return;
+    if (!active) {
+      thread.innerHTML = `<div class="aic-empty">Select a client to chat with the AI about them.</div>`;
+      return;
+    }
+    if (!aiChatHistory.length) {
+      const cl = clients.find((x) => x.id === active);
+      thread.innerHTML = `<div class="aic-empty">
+        <div class="ai-icon-wrap">${Icon("sparkles", { size: 22 })}</div>
+        <p>Ask me about <b>${esc(cl ? cl.name : "this client")}</b> — their tasks, project status, or conversation.</p>
+        <div class="aic-hints">
+          <button type="button" class="aic-hint">What tasks are pending?</button>
+          <button type="button" class="aic-hint">Summarize the latest conversation</button>
+          <button type="button" class="aic-hint">Which tasks are overdue?</button>
+        </div></div>`;
+      thread.querySelectorAll(".aic-hint").forEach((h) =>
+        h.addEventListener("click", () => { document.getElementById("ai-chat-text").value = h.textContent; sendAiChat(); }));
+      return;
+    }
+    thread.innerHTML = aiChatHistory.map((m) => aiChatBubble(m.role, m.content, false)).join("")
+      + (aiChatBusy ? aiChatBubble("assistant", "", true) : "");
+    thread.scrollTop = thread.scrollHeight;
+  }
+
+  async function sendAiChat() {
+    if (!aiCanChat || aiChatBusy) return;
+    const input = document.getElementById("ai-chat-text");
+    const q = input.value.trim();
+    if (!q) return;
+    if (!active) { toast("Select a client first"); return; }
+    aiChatFor = active;
+    input.value = ""; input.style.height = "";
+    aiChatHistory.push({ role: "user", content: q });
+    aiChatBusy = true;
+    renderAiChat();
+    try {
+      const r = await Api.post("/api/ai/assistant", { client_id: active, question: q, history: aiChatHistory.slice(0, -1) });
+      aiChatHistory.push({ role: "assistant", content: r.answer || "(no answer)" });
+    } catch (e) {
+      aiChatHistory.push({ role: "assistant", content: "⚠️ " + (e.message || "Something went wrong.") });
+    } finally {
+      aiChatBusy = false;
+      renderAiChat();
+    }
+  }
+
+  {
+    const sendBtn = document.getElementById("ai-chat-send");
+    const text = document.getElementById("ai-chat-text");
+    if (sendBtn) sendBtn.addEventListener("click", sendAiChat);
+    if (text) {
+      text.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendAiChat(); } });
+      text.addEventListener("input", () => { text.style.height = "auto"; text.style.height = Math.min(text.scrollHeight, 120) + "px"; });
+    }
+  }
 
   async function renderAI() {
     const cl = clients.find((x) => x.id === active);
@@ -1538,17 +1660,18 @@
       return;
     }
     aiConvId = convs[0].id;
-    aiFilter = { mode: "latest", value: "" };   // reset filter when switching client
+    // Only Weekly and Monthly are exposed for now; default to the current week.
+    aiFilter = { mode: "weekly", value: aiDefaultValue("weekly") };
 
-    // Filter bar (period + date/week/month picker) stays fixed; the report body
+    // Filter bar (period + week/month picker) stays fixed; the report body
     // below reloads whenever the filter changes.
-    const modes = [["latest", "Latest"], ["daily", "Daily"], ["weekly", "Weekly"], ["monthly", "Monthly"]];
+    const modes = [["weekly", "Weekly"], ["monthly", "Monthly"]];
     scroll.innerHTML = `
       <div class="ai-filter">
         <div class="ai-fseg" id="ai-fseg">
-          ${modes.map(([m, l]) => `<button type="button" data-mode="${m}" class="${m === "latest" ? "on" : ""}">${l}</button>`).join("")}
+          ${modes.map(([m, l]) => `<button type="button" data-mode="${m}" class="${m === aiFilter.mode ? "on" : ""}">${l}</button>`).join("")}
         </div>
-        <input type="date" id="ai-fdate" class="form-control form-control-sm" hidden />
+        <input type="week" id="ai-fdate" class="form-control form-control-sm" value="${aiFilter.value}" />
       </div>
       <div id="ai-report"><div style="padding:20px 0;text-align:center;color:var(--muted);font-size:12.5px">Loading...</div></div>`;
 
@@ -1557,14 +1680,9 @@
     seg.querySelectorAll("[data-mode]").forEach((b) => b.onclick = () => {
       aiFilter.mode = b.dataset.mode;
       seg.querySelectorAll("[data-mode]").forEach((x) => x.classList.toggle("on", x === b));
-      if (aiFilter.mode === "latest") {
-        dateInput.hidden = true;
-      } else {
-        dateInput.type = aiFilter.mode === "daily" ? "date" : aiFilter.mode === "weekly" ? "week" : "month";
-        aiFilter.value = aiDefaultValue(aiFilter.mode);
-        dateInput.value = aiFilter.value;
-        dateInput.hidden = false;
-      }
+      dateInput.type = aiFilter.mode === "weekly" ? "week" : "month";
+      aiFilter.value = aiDefaultValue(aiFilter.mode);
+      dateInput.value = aiFilter.value;
       loadAiReport();
     });
     dateInput.onchange = () => { aiFilter.value = dateInput.value; loadAiReport(); };
@@ -1587,17 +1705,17 @@
     try { a = await Api.get(url, { stale: false }); } catch (_) {}
 
     if (!a) {
-      // No report for this window — distinguish "never analysed" from "none in range".
-      const periodLabel = aiFilter.mode === "latest" ? "" :
-        aiFilter.mode === "daily" ? " for this day" :
-        aiFilter.mode === "weekly" ? " for this week" : " for this month";
+      // No report in the selected week/month. Running analysis creates a report
+      // dated now (so it lands in the current period), which is why the button
+      // stays available here.
+      const periodLabel = aiFilter.mode === "weekly" ? "this week" : "this month";
       report.innerHTML = `<div class="ai2-empty">
         <div class="ai-icon-wrap">${Icon("sparkles", { size: 24 })}</div>
-        <h4>${aiFilter.mode === "latest" ? "Not analyzed yet" : "No report" + periodLabel}</h4>
-        <p>${aiFilter.mode === "latest"
-          ? "Run AI analysis on this client's latest conversation."
-          : "There's no AI Chat Analysis in the selected period. Pick another, or view the latest."}</p>
-        ${(aiFilter.mode === "latest" && writable) ? `<button class="btn btn-primary btn-sm" id="run-ai" style="margin:0 auto">Run AI analysis</button>` : ""}
+        <h4>No report for ${periodLabel}</h4>
+        <p>${writable
+          ? "Run AI analysis to summarise this client's chats, files, audio, links and tasks — or pick another period above."
+          : "There's no AI Chat Analysis for this period. Pick another period above."}</p>
+        ${writable ? `<button class="btn btn-primary btn-sm" id="run-ai" style="margin:0 auto">Run AI analysis</button>` : ""}
       </div>`;
       const r = document.getElementById("run-ai"); if (r) r.onclick = () => runAI(aiConvId);
       return;
@@ -1624,13 +1742,6 @@
         <div class="lab"><span class="lab-dot amber"></span> Pending actions</div>
         <ul class="ai2-list todo">${(a.pending_actions || []).map((p) => `<li>${esc(p)}</li>`).join("") || '<li style="color:var(--muted)">None identified.</li>'}</ul>
       </div>
-      ${m.available ? `<div class="ai2-block">
-        <div class="lab"><span class="lab-dot"></span> Response time</div>
-        <div class="ai2-metrics">
-          <div class="ai2-metric"><div class="n">${m.avg_response_minutes}m</div><div class="l">Avg response</div></div>
-          <div class="ai2-metric"><div class="n">${m.slowest_seconds}s</div><div class="l">Slowest reply</div></div>
-        </div>
-      </div>` : ""}
       ${(a.follow_ups && a.follow_ups.length) ? `<div class="ai2-block">
         <div class="lab"><span class="lab-dot purple"></span> Follow-up</div>
         <div class="ai2-follow">${a.follow_ups.map(esc).join(" ")}</div>
@@ -1660,7 +1771,7 @@
     // Only fetch the AI analysis when the panel is actually open; otherwise defer
     // it until the user expands the "AI" tab (aiRenderedFor stays out of sync so
     // setAiPanelOpen(true) triggers the fetch).
-    if (aiPanelOpen) renderAI(); else aiRenderedFor = null;
+    if (aiPanelOpen) { if (aiTab === "chat") syncAiChat(); else renderAI(); } else aiRenderedFor = null;
     // Only active (non-archived) threads get live presence + read receipts.
     if (view !== "archived") {
       markRead(id);
@@ -1804,6 +1915,7 @@
     renderList();
   });
 
+  // ─── Init ───
   async function init() {
     const scroll = document.getElementById("cl-scroll");
     if (scroll) {
@@ -1820,6 +1932,7 @@
       ]);
       clients = cls; channels = chs;
       populateConvModal();
+      document.getElementById("nc-save").addEventListener("click", saveNewConversation);
       renderArchiveToggle(); renderFilter(); renderList();
       const first = (preselect && clients.find((c) => c.id === preselect)) ? preselect : (clients[0] && clients[0].id);
       if (first) selectClient(first);
@@ -1830,6 +1943,7 @@
       if (listTimer) clearInterval(listTimer);
       let listTick = 0;
       listTimer = setInterval(() => { if (!wsConnected || (++listTick % 4 === 0)) refreshList(); }, 5000);
+      document.addEventListener("visibilitychange", () => { if (!document.hidden) refreshList(); });
     } catch (e) {
       toast(e.message);
       if (scroll) {
@@ -1842,8 +1956,5 @@
       }
     }
   }
-
-  document.getElementById("nc-save").addEventListener("click", saveNewConversation);
-  document.addEventListener("visibilitychange", () => { if (!document.hidden) refreshList(); });
   init();
 })();

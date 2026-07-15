@@ -90,12 +90,18 @@ class Settings(BaseSettings):
     deepgram_api_key: str = ""
 
     # --- Storage (S3 or local disk fallback) ---
-    storage_backend: Literal["local", "s3"] = "local"
+    storage_backend: Literal["local", "s3", "db"] = "db"
     local_storage_dir: str = "./storage"
     s3_bucket: str = ""
     s3_region: str = "us-east-1"
     aws_access_key_id: str = ""
     aws_secret_access_key: str = ""
+
+    # --- Webhook intake (Make / Bitrix -> create client) ---
+    # Shared secret required in the X-Api-Key header on /api/intake/* endpoints.
+    # Empty disables intake entirely (requests are rejected), so it never runs
+    # open to the world by accident.
+    intake_api_key: str = ""
 
     # --- Bitrix24 ---
     bitrix_portal_url: str = ""  # e.g. https://your-portal.bitrix24.com

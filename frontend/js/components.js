@@ -243,19 +243,8 @@ function listGroup(items) {
 // Render an AI analysis object into a Bootstrap card body.
 function renderAnalysis(a) {
   if (!a) return '<p class="muted">No analysis yet.</p>';
-  const metrics = a.response_metrics || {};
-  let metricsHtml = "";
-  if (metrics.available) {
-    metricsHtml = `
-      <div class="mt-3"><strong>Response time</strong>
-        <ul class="mb-0 ps-3">
-          <li>Average: ${metrics.avg_response_minutes} min (${metrics.avg_response_seconds}s)</li>
-          <li>Fastest: ${metrics.fastest_seconds}s · Slowest: ${metrics.slowest_seconds}s</li>
-        </ul>
-      </div>`;
-  } else if (metrics.reason) {
-    metricsHtml = `<p class="muted mt-2 small">Response metrics: ${esc(metrics.reason)}</p>`;
-  }
+  // Response-time metrics (Response time / Average / Slowest) intentionally hidden.
+  const metricsHtml = "";
 
   return `
     <div class="row g-3">
