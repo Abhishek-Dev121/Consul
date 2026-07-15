@@ -9,7 +9,19 @@
   const tbSearch = document.querySelector(".tb-search");
   if (tbSearch) tbSearch.style.display = "none";
 
-  const FILTERS = ["all", "whatsapp", "upwork", "slack", "email", "telegram", "linkedin"];
+  // Built-in platforms are always shown; any other platform is appended
+  // dynamically from the channels that actually exist (plus custom platform
+  // types), so a newly created channel's platform gets its own filter chip
+  // automatically instead of being missing.
+  const BUILTIN_FILTERS = ["whatsapp", "upwork", "slack", "email", "telegram", "linkedin"];
+  function computeFilters() {
+    const keys = [...BUILTIN_FILTERS];
+    const seen = new Set(keys);
+    const add = (p) => { if (p && !seen.has(p)) { seen.add(p); keys.push(p); } };
+    channels.forEach((ch) => add(ch.platform));
+    if (typeof CUSTOM_PLATFORMS === "object" && CUSTOM_PLATFORMS) Object.keys(CUSTOM_PLATFORMS).forEach(add);
+    return ["all", ...keys];
+  }
   let clients = [], channels = [], active = null, chanFilter = "all", searchQ = "", view = "active";
   const preselect = parseInt(qs("client")) || null;
   const canPurge = isAdmin();
@@ -143,7 +155,7 @@
   }
 
   function renderFilter() {
-    document.getElementById("cl-filter").innerHTML = FILTERS.map((f) =>
+    document.getElementById("cl-filter").innerHTML = computeFilters().map((f) =>
       `<button class="f-chip ${f === chanFilter ? "active" : ""}" data-f="${f}">${f === "all" ? "All" : platformName(f)}</button>`
     ).join("");
     document.querySelectorAll("#cl-filter .f-chip").forEach((el) =>
@@ -191,7 +203,6 @@
           </span>
           <div class="ci2-body">
             <div class="ci2-row1"><span class="name">${esc(cl.name)}</span></div>
-            <div class="ci2-prev">${esc(cl.company || cl.email || "—")}</div>
             <div class="arch-actions">
               <button class="btn-restore" data-act="restore" data-id="${cl.id}">${Icon("restore", { size: 14 })} Restore</button>
               ${canPurge ? `<button class="btn-purge" data-act="purge" data-id="${cl.id}" title="Delete permanently">${Icon("trash", { size: 13 })} Delete</button>` : ""}
@@ -216,7 +227,6 @@
             <span class="name">${esc(cl.name)}</span>
             ${unreadBadge}
           </div>
-          <div class="ci2-prev">${esc(cl.company || cl.email || "—")}</div>
           <div class="ci2-foot">
             ${sentPill(cl.sentiment)}
             <span class="ch-pill" style="background:${chanColor(plat)}18;color:${chanColor(plat)}">

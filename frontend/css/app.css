@@ -1712,7 +1712,7 @@ a.chan-name.stretch::after { content: ""; position: absolute; inset: 0; border-r
 .chan-card:focus-within { border-color: var(--brand); box-shadow: 0 0 0 3px var(--brand-soft); }
 a.chan-name.stretch:focus-visible { outline: none; }
 /* Anything interactive must sit above the stretched link's overlay. */
-.chan-del, .chan-avs { position: relative; z-index: 1; }
+.chan-del, .chan-edit, .chan-avs { position: relative; z-index: 1; }
 
 /* The icon tile is tinted from the platform's own colour, set inline. */
 .chan-card .chan-ico {
@@ -1754,11 +1754,20 @@ a.chan-name.stretch:focus-visible { outline: none; }
 .chan-card:hover .chan-del, .chan-del:focus-visible { opacity: 1; }
 .chan-del:hover { color: var(--neg); border-color: var(--neg-soft); background: var(--neg-soft); }
 
+.chan-edit {
+  border: 1px solid var(--line); background: var(--surface); color: var(--muted-2);
+  width: 30px; height: 30px; border-radius: 8px; display: grid; place-items: center;
+  cursor: pointer; opacity: 0;
+  transition: opacity var(--dur-1) var(--ease), color var(--dur-1) var(--ease), border-color var(--dur-1) var(--ease);
+}
+.chan-card:hover .chan-edit, .chan-edit:focus-visible { opacity: 1; }
+.chan-edit:hover { color: var(--brand); border-color: var(--brand-soft); background: var(--brand-soft); }
+
 @media (max-width: 640px) {
   .chan-toolbar .tb-divider { display: none; }
   .chan-toolbar .seg { width: 100%; overflow-x: auto; flex-wrap: nowrap; scrollbar-width: none; }
   .chan-toolbar .seg::-webkit-scrollbar { display: none; }
-  .chan-del { opacity: 1; }        /* no hover on touch */
+  .chan-del, .chan-edit { opacity: 1; }        /* no hover on touch */
 }
 
 /* ===========================================================================

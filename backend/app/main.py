@@ -46,6 +46,7 @@ from app.routers import (
     conversations,
     files,
     integrations,
+    intake,
     messages,
     overview,
     pages,
@@ -106,7 +107,7 @@ async def no_cache(request, call_next):
     return response
 
 # API routers
-for r in (auth, users, permissions, channels, clients, conversations, messages, projects, files, audio, ai, activities, bitrix, overview, realtime, integrations):
+for r in (auth, users, permissions, channels, clients, conversations, messages, projects, files, audio, ai, activities, bitrix, overview, realtime, integrations, intake):
     app.include_router(r.router)
 
 

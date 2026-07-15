@@ -105,12 +105,9 @@
         <h2 title="${esc(client.name)}">${esc(client.name)}</h2>
         <div class="cd-sub">
           ${writable ? statusControl(client.status) : statusPill(client.status)}
-          ${client.company ? `<span class="cd-company">${esc(client.company)}</span>` : ""}
           ${primaryChannel ? `<span class="chip">${channelIcon(primaryChannel.platform, 13)} ${esc(primaryChannel.name)}</span>` : ""}
         </div>
         <div class="cd-quick">
-          ${client.email ? `<a href="mailto:${esc(client.email)}">${Icon("mail", { size: 13 })} ${esc(client.email)}</a>` : ""}
-          ${client.phone ? `<span>${Icon("phone", { size: 13 })} ${esc(client.phone)}</span>` : ""}
           <span>${Icon("users", { size: 13 })} ${(client.assignees || []).length} assignee${(client.assignees || []).length === 1 ? "" : "s"}</span>
         </div>
       </div>`;
@@ -131,10 +128,7 @@
       `<span class="chip">${avBox(a.name)} ${esc(a.name)}</span>`).join("") || `<span class="muted small">Unassigned</span>`;
     document.getElementById("info-body").innerHTML = `
       <div class="cd-info-grid">
-        <div class="card"><div class="card-header">Contact details</div><div class="card-body">
-          <div class="cd-kv"><span class="k">Company</span><span class="v ${client.company ? "" : "muted"}">${esc(client.company || "—")}</span></div>
-          <div class="cd-kv"><span class="k">Email</span><span class="v ${client.email ? "" : "muted"}">${client.email ? `<a href="mailto:${esc(client.email)}" style="color:var(--brand);text-decoration:none">${esc(client.email)}</a>` : "—"}</span></div>
-          <div class="cd-kv"><span class="k">Phone</span><span class="v ${client.phone ? "" : "muted"}">${esc(client.phone || "—")}</span></div>
+        <div class="card"><div class="card-header">Details</div><div class="card-body">
           <div class="cd-kv"><span class="k">Status</span><span class="v">${statusPill(client.status)}</span></div>
           <div class="cd-kv"><span class="k">Notes</span><span class="v ${client.notes ? "" : "muted"}">${esc(client.notes || "No notes yet.")}</span></div>
         </div></div>
@@ -407,6 +401,7 @@
     try {
       toast("Syncing with Bitrix24...", "info");
       await Api.post(`/api/bitrix/sync-project/${id}`);
+      invalidateProjectsCache();
       toast("Project synced successfully", "success");
       await loadProjects();
       await loadConversations();
@@ -428,6 +423,7 @@
     if (!ok) return;
     try {
       await Api.del(`/api/bitrix/link-project/${id}`);
+      invalidateProjectsCache();
       toast("Project unlinked", "success");
       await loadProjects();
     } catch (e) { toast(e.message); }
@@ -440,6 +436,16 @@
       clientProjects = await Api.get(`/api/projects?client_id=${clientId}`).catch(() => []);
     }
     return clientProjects;
+  }
+
+  // Drop the cached project list after a link/unlink/sync so the reload reflects
+  // reality. `Api.del`/`post` only invalidate their own exact path (e.g.
+  // "/api/bitrix/link-project/12"), never the "/api/projects?client_id=…" GET —
+  // and that GET is cached in sessionStorage, so the unlinked project keeps
+  // showing until a manual refresh. Also reset the in-memory `clientProjects`.
+  function invalidateProjectsCache() {
+    Api.invalidateCache("/api/projects");
+    clientProjects = null;
   }
 
   // ---- Files tab ----
@@ -816,6 +822,7 @@
       lpSaveBtn.textContent = "Linking...";
       try {
         await Api.post("/api/bitrix/link-project", { client_id: clientId, bitrix_group_id: groupId });
+        invalidateProjectsCache();
         toast("Project group linked successfully", "success");
         bootstrap.Modal.getOrCreateInstance(document.getElementById("linkProjectModal")).hide();
         loaded["tab-proj"] = true;

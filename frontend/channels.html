@@ -21,12 +21,6 @@
             <span class="fi"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="6.5"/><path d="M20 20l-4.3-4.3"/></svg></span>
             <input class="form-control" id="search" type="search" autocomplete="off" placeholder="Search channels…" aria-label="Search channels by name" />
           </div>
-          <div class="tb-divider"></div>
-          <span class="tb-label">Type</span>
-          <div class="seg" id="type-filter"></div>
-          <div class="tb-divider"></div>
-          <span class="tb-label">User</span>
-          <select class="form-select tb-select" id="user-filter" style="flex:0 1 170px" aria-label="Filter channels by assigned user"></select>
           <span class="tb-count" id="chan-count"></span>
         </div>
 
@@ -65,6 +59,17 @@
     </div>
     <div class="modal-footer"><button class="btn btn-light" data-bs-dismiss="modal">Cancel</button>
       <button class="btn btn-primary" id="save-channel">Create channel</button></div>
+  </div></div></div>
+
+  <!-- Edit channel modal (rename) -->
+  <div class="modal fade" id="editChannelModal" tabindex="-1"><div class="modal-dialog"><div class="modal-content">
+    <div class="modal-header"><h5 class="modal-title">Edit channel</h5><button class="btn-close" data-bs-dismiss="modal"></button></div>
+    <div class="modal-body">
+      <label class="form-label">Channel name</label>
+      <input class="form-control" id="edit-ch-name" placeholder="e.g. Acme — WhatsApp" autocomplete="off" />
+    </div>
+    <div class="modal-footer"><button class="btn btn-light" data-bs-dismiss="modal">Cancel</button>
+      <button class="btn btn-primary" id="save-edit-channel">Save changes</button></div>
   </div></div></div>
 
   <!-- Create client modal (with channel assignment) -->

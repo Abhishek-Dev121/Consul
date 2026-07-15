@@ -97,6 +97,12 @@ class Settings(BaseSettings):
     aws_access_key_id: str = ""
     aws_secret_access_key: str = ""
 
+    # --- Webhook intake (Make / Bitrix -> create client) ---
+    # Shared secret required in the X-Api-Key header on /api/intake/* endpoints.
+    # Empty disables intake entirely (requests are rejected), so it never runs
+    # open to the world by accident.
+    intake_api_key: str = ""
+
     # --- Bitrix24 ---
     bitrix_portal_url: str = ""  # e.g. https://your-portal.bitrix24.com
     bitrix_client_id: str = ""

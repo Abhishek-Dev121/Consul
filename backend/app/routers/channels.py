@@ -12,6 +12,7 @@ from app.rbac import require_permission
 from app.schemas.channel import (
     ChannelCreate,
     ChannelOut,
+    ChannelUpdate,
     PlatformTypeCreate,
     PlatformTypeOut,
 )
@@ -92,6 +93,40 @@ def create_channel(
     )
     db.add(channel)
     log_activity(db, action="channel.created", actor_id=actor.id, detail={"name": payload.name})
+    db.commit()
+    db.refresh(channel)
+    return channel
+
+
+@router.patch("/{channel_id}", response_model=ChannelOut)
+def update_channel(
+    channel_id: int,
+    payload: ChannelUpdate,
+    db: Session = Depends(get_db),
+    actor: User = Depends(require_permission("channels.manage")),
+):
+    channel = db.get(Channel, channel_id)
+    if not channel:
+        raise HTTPException(status_code=404, detail="Channel not found")
+
+    if payload.name is not None:
+        name = payload.name.strip()
+        if not name:
+            raise HTTPException(status_code=400, detail="Channel name cannot be empty")
+        channel.name = name
+
+    if payload.platform is not None:
+        platform = payload.platform.strip()
+        if platform not in BUILTIN_PLATFORMS and not db.execute(
+            select(PlatformType).where(PlatformType.key == platform)
+        ).scalar_one_or_none():
+            raise HTTPException(status_code=400, detail="Unknown platform type")
+        channel.platform = platform
+
+    if payload.config is not None:
+        channel.config = payload.config
+
+    log_activity(db, action="channel.updated", actor_id=actor.id, detail={"name": channel.name})
     db.commit()
     db.refresh(channel)
     return channel

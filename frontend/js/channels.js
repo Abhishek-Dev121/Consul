@@ -10,7 +10,8 @@
 
   const BUILTINS = ["whatsapp", "upwork", "slack", "email", "telegram", "linkedin"];
   let channels = [], allClients = [], users = [];
-  let typeFilter = "all", userFilter = "", searchTerm = "";
+  let typeFilter = "all", searchTerm = "";
+  let editingChannelId = null;   // channel currently open in the edit modal
   let newPlatformLogo = "";   // data-URL of the logo picked for a "Create New" platform
 
   // Distinct platform keys actually present, plus the built-ins and any custom
@@ -23,6 +24,28 @@
   }
 
   function contactsFor(id) { return allClients.filter((c) => c.channels.some((ch) => ch.id === id)); }
+
+  // Icon shown in a channel card's tile. A custom platform's uploaded logo is
+  // rendered large enough to fill the tile (the shared 16px helper left it a tiny
+  // speck in the corner); built-ins fall back to their brand glyph.
+  function tileIcon(platform) {
+    const cp = (typeof CUSTOM_PLATFORMS === "object" && CUSTOM_PLATFORMS) ? CUSTOM_PLATFORMS[platform] : null;
+    if (cp && cp.logo) {
+      return `<img src="${cp.logo}" alt="" style="width:30px;height:30px;border-radius:8px;object-fit:cover;background:#fff;display:block" />`;
+    }
+    return channelIcon(platform, 24, true);
+  }
+
+  // Drop the cached channel/client lists so a reload after a mutation reflects
+  // reality. `Api.del`/`post`/`patch` only invalidate their own exact path (e.g.
+  // "/api/channels/21"), never the list key "/api/channels" — and the cache
+  // lives in sessionStorage, so a stale list survives a page refresh for its
+  // whole TTL. Without this, a deleted channel keeps showing until the cache
+  // expires. Deleting a channel also unlinks it from clients, so clear those too.
+  function invalidateChannelCaches() {
+    Api.invalidateCache("/api/channels");
+    Api.invalidateCache("/api/clients");
+  }
 
   async function loadData() {
     // `/api/users` is paginated and returns { items, total, limit, offset } — not
@@ -39,30 +62,22 @@
   }
 
   // ---- Filters ----
+  // The Type filter UI was removed; keep this as a safe no-op so callers don't
+  // break, and leave `typeFilter` at its "all" default so nothing is hidden.
   function renderFilters() {
-    const types = ["all", ...knownPlatforms()];
     const tf = document.getElementById("type-filter");
+    if (!tf) return;
+    const types = ["all", ...knownPlatforms()];
     tf.innerHTML = types.map((t) =>
       `<button type="button" class="pill ${t === typeFilter ? "active" : ""}" data-t="${t}">${t === "all" ? "All" : platformName(t)}</button>`).join("");
     tf.querySelectorAll(".pill").forEach((el) =>
       el.addEventListener("click", () => { typeFilter = el.dataset.t; renderFilters(); renderGrid(); }));
-
-    const uf = document.getElementById("user-filter");
-    if (uf.options.length === 0) {
-      uf.innerHTML = '<option value="">All users</option>' +
-        users.map((u) => `<option value="${u.id}">${esc(u.name)}</option>`).join("");
-      uf.addEventListener("change", () => { userFilter = uf.value; renderGrid(); });
-    }
   }
 
   function visibleChannels() {
     let list = channels.slice();
     if (typeFilter !== "all") list = list.filter((c) => c.platform === typeFilter);
     if (searchTerm) list = list.filter((c) => c.name.toLowerCase().includes(searchTerm));
-    if (userFilter) {
-      const uid = parseInt(userFilter, 10);
-      list = list.filter((c) => contactsFor(c.id).some((cl) => (cl.assignees || []).some((a) => a.id === uid)));
-    }
     return list;
   }
 
@@ -86,7 +101,6 @@
     }
 
     grid.innerHTML = list.map((c) => {
-      const m = platformMeta(c.platform);
       const clients = contactsFor(c.id);
       const shown = clients.slice(0, 4);
       const rest = clients.length - shown.length;
@@ -96,7 +110,7 @@
       // while the delete button stays a real sibling button.
       return `<div class="chan-card">
         <div class="chan-top" style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
-          <div class="chan-ico" style="background:${tint}">${m.icon}</div>
+          <div class="chan-ico" style="background:${tint}">${tileIcon(c.platform)}</div>
           <span class="chip pf pf-${esc(c.platform)}">${esc(platformName(c.platform))}</span>
         </div>
         <a class="chan-name stretch" href="/channel?id=${c.id}" title="${esc(c.name)}">${esc(c.name)}</a>
@@ -107,6 +121,7 @@
             : `<span class="chan-none">No clients linked</span>`}
           <span style="display:flex;align-items:center;gap:8px">
             <span class="chan-open">Open ${Icon("chevronDown", { size: 13, style: "transform:rotate(-90deg)" })}</span>
+            ${admin ? `<button type="button" class="chan-edit" data-edit="${c.id}" title="Edit channel" aria-label="Edit channel ${esc(c.name)}">${Icon("edit", { size: 14 })}</button>` : ""}
             ${admin ? `<button type="button" class="chan-del" data-del="${c.id}" title="Delete channel" aria-label="Delete channel ${esc(c.name)}">${Icon("trash", { size: 14 })}</button>` : ""}
           </span>
         </div>
@@ -115,7 +130,33 @@
 
     grid.querySelectorAll("[data-del]").forEach((btn) =>
       btn.addEventListener("click", () => delChannel(parseInt(btn.dataset.del, 10))));
+    grid.querySelectorAll("[data-edit]").forEach((btn) =>
+      btn.addEventListener("click", (e) => { e.preventDefault(); openEditChannel(parseInt(btn.dataset.edit, 10)); }));
   }
+
+  // ---- Edit (rename) channel ----
+  function openEditChannel(id) {
+    const ch = channels.find((c) => c.id === id);
+    if (!ch) return;
+    editingChannelId = id;
+    document.getElementById("edit-ch-name").value = ch.name;
+    bootstrap.Modal.getOrCreateInstance(document.getElementById("editChannelModal")).show();
+  }
+
+  document.getElementById("save-edit-channel").addEventListener("click", async () => {
+    const name = document.getElementById("edit-ch-name").value.trim();
+    if (!name) return toast("Channel name required");
+    if (!editingChannelId) return;
+    try {
+      await Api.patch(`/api/channels/${editingChannelId}`, { name });
+      invalidateChannelCaches();
+      bootstrap.Modal.getOrCreateInstance(document.getElementById("editChannelModal")).hide();
+      await loadData();
+      refreshClientChannelOptions();
+      renderGrid();
+      toast("Channel updated", "success");
+    } catch (e) { toast(e.message); }
+  });
 
   document.getElementById("search").addEventListener("input", (e) => {
     searchTerm = e.target.value.trim().toLowerCase();
@@ -139,6 +180,7 @@
     if (!ok) return;
     try {
       await Api.del(`/api/channels/${id}`);
+      invalidateChannelCaches();
       await loadData();
       refreshClientChannelOptions();
       renderGrid();
@@ -223,6 +265,7 @@
         platform = created.key;
       }
       await Api.post("/api/channels", { name, platform, config: {} });
+      invalidateChannelCaches();
       bootstrap.Modal.getOrCreateInstance(document.getElementById("channelModal")).hide();
       await loadData(); populatePlatformSelect(); refreshClientChannelOptions(); renderFilters(); renderGrid();
       toast("Channel created", "success");
