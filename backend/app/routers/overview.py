@@ -6,7 +6,7 @@ their assigned clients.
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.cache import ttl_cache
@@ -295,50 +295,52 @@ def clients_overview(archived: bool = False, db: Session = Depends(get_db), user
 
     sent = _sentiment_by_client(db, conv_to_client)
 
-    # Last activity (for WhatsApp-style ordering) + per-user unread count. Pull the
-    # messages for the visible clients once and derive both in Python — a single
-    # round-trip instead of one COUNT query per client.
     def _aware(dt):
         if dt is None:
             return None
         return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
 
-    msg_rows = db.execute(
-        select(
-            Message.client_id, Message.created_by, Message.is_deleted,
-            func.coalesce(Message.sent_at, Message.created_at).label("ts"),
-        ).where(Message.client_id.in_(list(cids) or [-1]))
-    ).all()
-
-    read_rows = db.execute(
+    # Last activity (for ordering) + per-user unread count, computed as ONE grouped
+    # aggregate on the database (≈one row per client) instead of pulling every
+    # message into Python. The old approach transferred the whole message table
+    # each request and got slower as chats accumulated (14k+ rows); this stays flat.
+    ts_col = func.coalesce(Message.sent_at, Message.created_at)
+    lr = (
         select(ClientRead.client_id, ClientRead.last_read_at)
-        .where(ClientRead.client_id.in_(list(cids) or [-1]))
         .where(ClientRead.user_id == user.id)
+        .subquery()
+    )
+    agg_rows = db.execute(
+        select(
+            Message.client_id,
+            func.max(ts_col).label("last_ts"),
+            # Unread = messages from someone else (incl. system, never the viewer),
+            # newer than the last time the viewer opened the thread.
+            func.count().filter(
+                and_(
+                    Message.created_by.is_distinct_from(user.id),
+                    or_(lr.c.last_read_at.is_(None), ts_col > lr.c.last_read_at),
+                )
+            ).label("unread"),
+        )
+        .select_from(Message)
+        .join(Client, Client.id == Message.client_id)
+        .outerjoin(lr, lr.c.client_id == Message.client_id)
+        .where(
+            Message.client_id.in_(list(cids) or [-1]),
+            Message.is_deleted.is_(False),
+            # "Clear chat" excludes anything at/before the marker from activity/unread.
+            or_(Client.chat_cleared_at.is_(None), ts_col > Client.chat_cleared_at),
+        )
+        .group_by(Message.client_id)
     ).all()
-    read_dict = {clid: _aware(ts) for clid, ts in read_rows}
-    cleared = {c.id: _aware(c.chat_cleared_at) for c in clients}
 
     last_activity: dict[int, datetime] = {}
     unread_count: dict[int, int] = {}
-    for clid, created_by, is_deleted, ts in msg_rows:
-        ts = _aware(ts)
-        if is_deleted or ts is None:
-            continue
-        # Messages cleared via "Clear chat" don't count as activity or unread.
-        cl_cleared = cleared.get(clid)
-        if cl_cleared and ts <= cl_cleared:
-            continue
-        prev = last_activity.get(clid)
-        if prev is None or ts > prev:
-            last_activity[clid] = ts
-        # Unread = messages from someone else (never your own) newer than the last
-        # time you opened this thread. This is why sending a message never makes it
-        # show up as unread to the sender.
-        if created_by == user.id:
-            continue
-        last_read = read_dict.get(clid)
-        if last_read is None or ts > last_read:
-            unread_count[clid] = unread_count.get(clid, 0) + 1
+    for clid, last_ts, unread in agg_rows:
+        last_activity[clid] = _aware(last_ts)
+        if unread:
+            unread_count[clid] = int(unread)
 
     rows = []
     for c in clients:

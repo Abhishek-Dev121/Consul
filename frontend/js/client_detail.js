@@ -271,12 +271,17 @@
       if (STATUS_LABELS[raw]) return STATUS_LABELS[raw];
       return raw.charAt(0).toUpperCase() + raw.slice(1);   // already text — tidy the case
     };
-    const taskPill = (s) => {
-      const v = (s == null ? "" : String(s)).toLowerCase().trim();
-      const label = taskStatusLabel(s);
-      const isDone = doneStatuses.includes(v) || label.toLowerCase() === "complete";
-      const isProgress = !isDone && (v === "3" || v === "4" || v.includes("progress") || v.includes("review"));
-      const cls = isDone ? "st-done" : isProgress ? "st-progress" : "st-active";
+    // A task is Complete if Bitrix closed it (closed_date set) OR its status is a
+    // done code — the closed_date is the real-time truth, so a finished task never
+    // lingers as "In review"/"In progress" just because of its status code.
+    const isTaskDone = (t) =>
+      !!t.closed_date || doneStatuses.includes(String(t.status || "").toLowerCase().trim());
+    const taskPill = (t) => {
+      const v = String(t.status == null ? "" : t.status).toLowerCase().trim();
+      const done = isTaskDone(t);
+      const label = done ? "Complete" : taskStatusLabel(t.status);
+      const isProgress = !done && (v === "3" || v === "4" || v.includes("progress") || v.includes("review"));
+      const cls = done ? "st-done" : isProgress ? "st-progress" : "st-active";
       return `<span class="st ${cls}"><span class="sd"></span>${esc(label)}</span>`;
     };
     const prioChip = (p) => p === "2"
@@ -285,7 +290,7 @@
 
     const cards = projects.map((p, pi) => {
       const total = p.tasks.length;
-      const done = p.tasks.filter((t) => doneStatuses.includes((t.status || "").toLowerCase())).length;
+      const done = p.tasks.filter(isTaskDone).length;
       const prog = total > 0 ? Math.round((done / total) * 100) : 0;
 
       const members = p.members.map((m) =>
@@ -298,7 +303,7 @@
           <td><div style="font-weight:600">${esc(t.title)}</div>
             ${t.description ? `<div class="cd-task-desc">${esc(t.description)}</div>` : ""}</td>
           <td>${esc(t.responsible_name || "Unassigned")}</td>
-          <td>${taskPill(t.status)}</td>
+          <td>${taskPill(t)}</td>
           <td>${prioChip(t.priority)}</td>
           <td class="mono">${est}</td>
           <td class="mono" style="color:var(--muted)">${t.due_date ? fmtDate(t.due_date).split(",")[0] : "—"}</td>
