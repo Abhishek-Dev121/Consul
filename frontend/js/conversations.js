@@ -682,15 +682,25 @@
         const DOUBLE = `<svg width="17" height="14" viewBox="0 0 22 14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2 7.5l4 4L14 3"/><path d="M8 11.5L16.5 3"/></svg>`;
         const tickFor = (m) => `<span class="tick ${m.read ? "read" : ""}" title="${m.read ? "Seen by a teammate" : "Sent"}">${m.read ? DOUBLE : SINGLE}</span>`;
 
-        let html = "", lastDay = null, lastSide = null, lastSender = null;
+        const getSenderColor = (name) => {
+          if (!name) return "var(--primary)";
+          let hash = 0;
+          for (let i = 0; i < name.length; i++) {
+            hash = name.charCodeAt(i) + ((hash << 5) - hash);
+          }
+          const h = Math.abs(hash % 360);
+          const s = 65;
+          const l = 40; // 40% lightness for high contrast/readability
+          return `hsl(${h}, ${s}%, ${l}%)`;
+        };
+
+        let html = "", lastDay = null, lastSide = null, lastSender = null, lastWasAtt = false;
         for (const m of msgs) {
           const dt = m.sent_at || m.created_at;
           const day = waDay(dt);
-          if (day !== lastDay) { html += `<div class="day-sep2">${esc(day)}</div>`; lastDay = day; lastSide = null; lastSender = null; }
+          if (day !== lastDay) { html += `<div class="day-sep2">${esc(day)}</div>`; lastDay = day; lastSide = null; lastSender = null; lastWasAtt = false; }
           const side = m.is_client ? "in" : "out";
           const groupStart = (side !== lastSide) || (m.sender_name !== lastSender);
-          lastSide = side;
-          lastSender = m.sender_name;
 
           const rawUrl = m.attachment_url || "";
           const isExternal = rawUrl.startsWith("http");
@@ -769,13 +779,18 @@
                </button>`
             : "";
 
-          const sender = groupStart ? `<div class="wa-sender">${esc(m.sender_name)}</div>` : "";
+          const showSender = !m.deleted && m.sender_name;
+          const sender = showSender ? `<div class="wa-sender" style="color: ${getSenderColor(m.sender_name)}">${esc(m.sender_name)}</div>` : "";
           const time = `<span class="wa-time">${editedTag}${waTime(dt)}${(side === "out" && !m.deleted) ? tickFor(m) : ""}</span>`;
           const rawAttr = (!hasAtt && !m.deleted) ? ` data-raw="${esc(m.body)}"` : "";
           html += `<div class="msg2 ${side} ${groupStart ? "grp" : ""} ${m.deleted ? "is-deleted" : ""}" data-mid="${m.id}" data-del="${canDelete ? 1 : 0}" data-snippet="${esc(snippet)}" data-sender="${esc(m.sender_name)}">
             <span class="msg-check"></span>
             <div class="bubble2 ${hasAtt ? "has-att" : ""}" data-mid="${m.id}"${rawAttr}>${quote}${sender}${content}${time}${menu}</div>
           </div>`;
+
+          lastSide = side;
+          lastSender = m.sender_name;
+          lastWasAtt = hasAtt;
         }
         body.innerHTML = html;
         wireMessageMenus(body);
