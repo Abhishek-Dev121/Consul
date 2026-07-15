@@ -343,7 +343,8 @@ def clients_overview(archived: bool = False, db: Session = Depends(get_db), user
     rows = []
     for c in clients:
         la = last_activity.get(c.id)
-        rows.append((la, {
+        ca = _aware(c.created_at)
+        rows.append((la, ca, {
             "id": c.id, "name": c.name, "company": c.company, "status": c.status,
             "email": c.email, "phone": c.phone,
             "channels": [{"id": ch.id, "name": ch.name, "platform": ch.platform} for ch in c.channels],
@@ -357,11 +358,15 @@ def clients_overview(archived: bool = False, db: Session = Depends(get_db), user
                 "projects": projects.get(c.id, 0), "docs": docs.get(c.id, 0),
             },
         }))
-    # Most recent activity first (clients with no messages fall to the bottom,
-    # ordered by name via the stable sort over the name-ordered input).
+    # Order by recency, newest first. A client's recency is its last message
+    # activity, or — when it has no messages yet (e.g. a just-created client) —
+    # its creation time. This keeps WhatsApp-style ordering for active chats
+    # while surfacing brand-new clients at the top instead of sinking them to
+    # the bottom. (Messages can only post-date creation, so last_activity, when
+    # present, is always >= created_at.)
     _EPOCH = datetime.min.replace(tzinfo=timezone.utc)
-    rows.sort(key=lambda r: r[0] or _EPOCH, reverse=True)
-    out = [r[1] for r in rows]
+    rows.sort(key=lambda r: r[0] or r[1] or _EPOCH, reverse=True)
+    out = [r[2] for r in rows]
     # Short TTL: this list drives WhatsApp-style live ordering + unread badges, so
     # it must stay fresh. API-driven sends bust the cache immediately; this bound
     # keeps inbound messages that arrive via other paths (e.g. Bitrix sync) from
