@@ -402,7 +402,7 @@ def _sync_tasks(db: Session, proj: Project) -> None:
             db.add(row)
 
 
-def _sync_chats(db: Session, proj: Project, client_id: int) -> None:
+def _sync_chats(db: Session, proj: Project, client_id: int, max_pages: int = 100, sync_comments: bool = True) -> None:
     """Sync group chat or fall back to task comments as a conversation stream."""
     convo_title = f"Bitrix24 Chat - {proj.title}"
     convo = db.execute(select(Conversation).where(
@@ -425,43 +425,148 @@ def _sync_chats(db: Session, proj: Project, client_id: int) -> None:
     try:
         messages = []
         users_list = []
+        files_list = []
+
+        def _fetch_all_dialog_messages(params: dict):
+            all_msgs = []
+            all_users = []
+            all_files = []
+            last_id = None
+            for _ in range(max_pages):
+                req_params = dict(params)
+                req_params["LIMIT"] = 50
+                if last_id is not None:
+                    req_params["LAST_ID"] = last_id
+                res = call_api(db, "im.dialog.messages.get", req_params)
+                result = res.get("result") or {}
+                batch = result.get("messages") or []
+                users = result.get("users") or []
+                files = result.get("files") or []
+                if not batch:
+                    break
+                
+                try:
+                    current_min_id = min(int(m["id"]) for m in batch)
+                except Exception:
+                    break
+                
+                if last_id is not None and current_min_id >= last_id:
+                    # Prevent infinite loops if API ignores LAST_ID
+                    all_msgs.extend(batch)
+                    all_users.extend(users)
+                    all_files.extend(files)
+                    break
+                
+                all_msgs.extend(batch)
+                all_users.extend(users)
+                all_files.extend(files)
+                if len(batch) < 50:
+                    break
+                last_id = current_min_id
+            return all_msgs, all_users, all_files
+
         try:
             # 1a. Try direct fetch using DIALOG_ID = sg<group_id> (e.g. sg620)
-            msg_res = call_api(db, "im.dialog.messages.get", {"DIALOG_ID": f"sg{proj.bitrix_project_id}"})
-            messages = msg_res.get("result", {}).get("messages") or []
-            users_list = msg_res.get("result", {}).get("users") or []
+            messages, users_list, files_list = _fetch_all_dialog_messages({"DIALOG_ID": f"sg{proj.bitrix_project_id}"})
         except Exception:
             # 1b. Fallback: Fetch Chat ID first via im.chat.get, then query messages
             chat_res = call_api(db, "im.chat.get", {"ENTITY_TYPE": "SONET_GROUP", "ENTITY_ID": proj.bitrix_project_id})
             chat_id = chat_res.get("result", {}).get("id")
             if chat_id:
-                msg_res = call_api(db, "im.dialog.messages.get", {"CHAT_ID": chat_id})
-                messages = msg_res.get("result", {}).get("messages") or []
-                users_list = msg_res.get("result", {}).get("users") or []
+                messages, users_list, files_list = _fetch_all_dialog_messages({"CHAT_ID": chat_id})
 
         if messages:
+            from app.services.chat_service import _is_client_speaker, _name_tokens
+            from app.models.client import Client
+            client = db.get(Client, client_id)
+            client_name = client.name if client else ""
+            tokens = _name_tokens(client_name)
+
             users_map = {str(u["id"]): f"{u.get('name', '')} {u.get('last_name', '')}".strip() for u in users_list}
+            files_map = {str(f["id"]): f for f in files_list if "id" in f}
+            new_msgs = 0
             for m in messages:
                 mid = f"chat_{m['id']}"
-                exists = db.execute(select(Message).where(Message.bitrix_message_id == mid)).first()
+                
+                # Check if message already exists in DB
+                exists = db.execute(select(Message).where(Message.bitrix_message_id == mid)).scalar_one_or_none()
+                
+                # Only download file if it's a new message or has an external/un-synced attachment URL
+                need_download = False
+                if not exists:
+                    need_download = True
+                elif exists and (not exists.attachment_url or exists.attachment_url.startswith("http")):
+                    need_download = True
+                
+                attachment_type = None
+                attachment_url = None
+                attachment_name = None
+                
+                # Check for files
+                params = m.get("params") or {}
+                file_ids = params.get("FILE_ID") or []
+                if isinstance(file_ids, (str, int)):
+                    file_ids = [file_ids]
+                
+                if file_ids:
+                    fid = str(file_ids[0])
+                    if fid in files_map:
+                        f_info = files_map[fid]
+                        attachment_name = f_info.get("name")
+                        
+                        if need_download:
+                            dialog_id = f"sg{proj.bitrix_project_id}"
+                            local_url, att_type = _download_and_save_bitrix_file(
+                                db, client_id, dialog_id, int(fid), attachment_name, f_info.get("type")
+                            )
+                            if local_url:
+                                attachment_url = local_url
+                                attachment_type = att_type
+                            else:
+                                attachment_url = f_info.get("urlDownload") or f_info.get("urlShow")
+                                is_audio = (
+                                    f_info.get("type") == "audio"
+                                    or f_info.get("isVoiceNote")
+                                    or str(attachment_name).lower().endswith((".mp3", ".wav", ".m4a", ".ogg", ".oga"))
+                                )
+                                attachment_type = "audio" if is_audio else "file"
+                        elif exists:
+                            attachment_url = exists.attachment_url
+                            attachment_type = exists.attachment_type
+                            attachment_name = exists.attachment_name
+
                 if not exists:
                     author_id = str(m.get("author_id", ""))
                     sender = users_map.get(author_id, "User " + author_id)
+                    is_client = _is_client_speaker(sender, tokens)
                     db.add(Message(
                         client_id=client_id,
                         conversation_id=convo.id,
                         sender_name=sender,
                         body=m.get("text") or "",
-                        is_client=False,
+                        is_client=is_client,
                         bitrix_message_id=mid,
-                        sent_at=_parse_iso_date(m.get("date"))
+                        sent_at=_parse_iso_date(m.get("date")),
+                        attachment_type=attachment_type,
+                        attachment_url=attachment_url,
+                        attachment_name=attachment_name
                     ))
+                    new_msgs += 1
+                elif exists and need_download and attachment_url:
+                    exists.attachment_type = attachment_type
+                    exists.attachment_url = attachment_url
+                    exists.attachment_name = attachment_name
+                    
+            if new_msgs > 0:
+                from app.services.ws_manager import notify as ws_notify
+                ws_notify({"type": "message", "client_id": client_id, "action": "new"})
             messages_synced = True
     except Exception:
         pass  # Gracefully fall back to task comments if scope lacks 'im' or returns 401
 
     # Attempt 2: Fallback to Task Comments (always supported under tasks scope)
-    if not messages_synced:
+    if not messages_synced and sync_comments:
+        new_msgs = 0
         for t in proj.tasks:
             try:
                 comments_res = call_api(db, "task.commentitem.getlist", {"taskId": t.bitrix_task_id})
@@ -479,8 +584,12 @@ def _sync_chats(db: Session, proj: Project, client_id: int) -> None:
                             bitrix_message_id=cid,
                             sent_at=_parse_comment_date(c.get("POST_DATE"))
                         ))
+                        new_msgs += 1
             except Exception:
                 continue
+        if new_msgs > 0:
+            from app.services.ws_manager import notify as ws_notify
+            ws_notify({"type": "message", "client_id": client_id, "action": "new"})
 
 
 def _sync_recordings(db: Session, proj: Project, client_id: int) -> None:
@@ -556,3 +665,98 @@ def _parse_iso_date(raw):
 
 def _now():
     return datetime.now(timezone.utc)
+
+
+def _download_and_save_bitrix_file(db: Session, client_id: int, dialog_id: str, file_id: int, filename: str, file_type: str) -> tuple[str, str]:
+    """Downloads a file from Bitrix using the webhook, saves it locally, and creates a database record.
+    Returns a tuple of (local_attachment_url, attachment_type).
+    """
+    import httpx
+    from app.services import storage_service
+    from app.models.file import FileRecord
+    from app.models.audio import AudioRecording
+    
+    try:
+        # 1. Call im.v2.File.download to get the authenticated download url
+        res = call_api(db, "im.v2.File.download", {"dialogId": dialog_id, "fileId": file_id})
+        download_url = res.get("result", {}).get("downloadUrl")
+        if not download_url:
+            return None, None
+            
+        # 2. Download file content with 25MB size limit
+        max_size = 25 * 1024 * 1024  # 25 MB
+        with httpx.stream("GET", download_url, timeout=60) as r:
+            if r.status_code != 200:
+                return None, None
+            
+            cl_header = r.headers.get("Content-Length")
+            if cl_header:
+                try:
+                    if int(cl_header) > max_size:
+                        print(f"Skipping download of Bitrix file {file_id}: size {cl_header} bytes exceeds 25MB limit", flush=True)
+                        return None, None
+                except ValueError:
+                    pass
+            
+            content_bytes = bytearray()
+            for chunk in r.iter_bytes(chunk_size=8192):
+                content_bytes.extend(chunk)
+                if len(content_bytes) > max_size:
+                    print(f"Skipping download of Bitrix file {file_id}: downloaded data exceeds 25MB limit", flush=True)
+                    return None, None
+            content = bytes(content_bytes)
+        
+        # 3. Determine if it's audio or general file
+        is_audio = (
+            file_type == "audio"
+            or str(filename).lower().endswith((".mp3", ".wav", ".m4a", ".ogg", ".oga"))
+        )
+        prefix = "audio" if is_audio else "files"
+        
+        # 4. Save file to storage
+        storage_key = storage_service.save_bytes(content, filename, prefix=prefix)
+        ctype = storage_service.guess_content_type(filename)
+        
+        # 5. Create database record
+        if is_audio:
+            exists = db.execute(select(AudioRecording).where(AudioRecording.storage_key == storage_key)).scalars().first()
+            if not exists:
+                rec = AudioRecording(
+                    client_id=client_id,
+                    filename=filename,
+                    storage_key=storage_key,
+                    content_type=ctype,
+                    duration=0.0,
+                    size=len(content),
+                    data=content
+                )
+                db.add(rec)
+                db.flush()
+                audio_id = rec.id
+            else:
+                audio_id = exists.id
+            local_url = f"/api/audio/{audio_id}/download"
+            att_type = "audio"
+        else:
+            exists = db.execute(select(FileRecord).where(FileRecord.storage_key == storage_key)).scalars().first()
+            if not exists:
+                rec = FileRecord(
+                    client_id=client_id,
+                    filename=filename,
+                    storage_key=storage_key,
+                    content_type=ctype,
+                    size=len(content),
+                    data=content
+                )
+                db.add(rec)
+                db.flush()
+                file_id_db = rec.id
+            else:
+                file_id_db = exists.id
+            local_url = f"/api/files/{file_id_db}/download"
+            att_type = "file"
+            
+        return local_url, att_type
+    except Exception as e:
+        print(f"Failed to download and save Bitrix file {file_id}: {e}", flush=True)
+        return None, None

@@ -71,6 +71,9 @@ def _ensure_conversation(db: Session, client: Client, channel_id: int | None) ->
     return conv
 
 
+_LAST_BITRIX_SYNC: dict[int, float] = {}
+
+
 @router.get("/{client_id}/messages", response_model=list[MessageListOut])
 def list_messages(
     client_id: int,
@@ -88,6 +91,25 @@ def list_messages(
             before_dt = datetime.fromisoformat(before.replace("Z", "+00:00"))
         except ValueError:
             before_dt = None
+
+    import time
+    if before_dt is None:
+        now_ts = time.time()
+        if now_ts - _LAST_BITRIX_SYNC.get(client_id, 0) > 10:
+            _LAST_BITRIX_SYNC[client_id] = now_ts
+            from app.models.project import Project
+            from app.services.bitrix_service import _sync_chats
+            projects = db.execute(
+                select(Project)
+                .where(Project.client_id == client_id, Project.bitrix_project_id != None)
+            ).scalars().all()
+            for proj in projects:
+                try:
+                    _sync_chats(db, proj, client_id, max_pages=1, sync_comments=False)
+                    db.commit()
+                except Exception:
+                    db.rollback()
+
     messages, backfilled = chat_service.list_client_messages(db, client, limit=limit, before=before_dt)
     if backfilled:
         db.commit()  # persist the lazy backfill only when it actually wrote

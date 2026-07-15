@@ -682,14 +682,15 @@
         const DOUBLE = `<svg width="17" height="14" viewBox="0 0 22 14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2 7.5l4 4L14 3"/><path d="M8 11.5L16.5 3"/></svg>`;
         const tickFor = (m) => `<span class="tick ${m.read ? "read" : ""}" title="${m.read ? "Seen by a teammate" : "Sent"}">${m.read ? DOUBLE : SINGLE}</span>`;
 
-        let html = "", lastDay = null, lastSide = null;
+        let html = "", lastDay = null, lastSide = null, lastSender = null;
         for (const m of msgs) {
           const dt = m.sent_at || m.created_at;
           const day = waDay(dt);
-          if (day !== lastDay) { html += `<div class="day-sep2">${esc(day)}</div>`; lastDay = day; lastSide = null; }
+          if (day !== lastDay) { html += `<div class="day-sep2">${esc(day)}</div>`; lastDay = day; lastSide = null; lastSender = null; }
           const side = m.is_client ? "in" : "out";
-          const groupStart = side !== lastSide;
+          const groupStart = (side !== lastSide) || (m.sender_name !== lastSender);
           lastSide = side;
+          lastSender = m.sender_name;
 
           const rawUrl = m.attachment_url || "";
           const isExternal = rawUrl.startsWith("http");
@@ -699,30 +700,50 @@
           const extLower = (m.attachment_name || "").toLowerCase();
           const isVideo = [".mp4", ".mov", ".m4v", ".webm", ".avi", ".mkv"].some((e) => extLower.endsWith(e));
           const isImage = [".png", ".jpg", ".jpeg", ".gif", ".webp"].some((e) => extLower.endsWith(e));
+          const isAudio = [".mp3", ".wav", ".m4a", ".ogg", ".oga"].some((e) => extLower.endsWith(e)) || m.attachment_type === "audio";
 
-          let content, hasAtt = false;
-          if (m.attachment_type === "audio" && isVideo) {
+          let content = "", hasAtt = false;
+          if (isVideo) {
             hasAtt = true;
-            content = `<div class="att-video"><video controls preload="metadata" src="${esc(url)}" style="max-width:100%;width:280px;border-radius:6px;display:block;"></video></div>`;
-          } else if (m.attachment_type === "audio") {
+            content += `<div class="att-video"><video controls preload="metadata" src="${esc(url)}" style="max-width:100%;width:280px;border-radius:6px;display:block;"></video></div>`;
+          } else if (isImage) {
             hasAtt = true;
-            content = `<div class="att-audio"><audio controls preload="none" src="${esc(url)}"></audio></div>`;
-          } else if (m.attachment_type === "file" && isImage) {
+            content += `<div class="att-image"><img class="att-img" data-url="${esc(url)}" src="${esc(url)}" style="max-width:100%;width:280px;max-height:280px;object-fit:cover;border-radius:6px;display:block;cursor:pointer;" /></div>`;
+          } else if (isAudio) {
             hasAtt = true;
-            content = `<div class="att-image"><img class="att-img" data-url="${esc(url)}" src="${esc(url)}" style="max-width:100%;width:280px;max-height:280px;object-fit:cover;border-radius:6px;display:block;cursor:pointer;" /></div>`;
-          } else if (m.attachment_type === "file") {
+            content += `<div class="att-audio"><audio controls preload="none" src="${esc(url)}"></audio></div>`;
+          } else if (m.attachment_url || m.attachment_name) {
             hasAtt = true;
             const ext = isExternal ? "LINK" : (m.attachment_name || "file").split(".").pop().toUpperCase().slice(0, 4);
-            content = `<a class="att-file" href="${esc(url)}" target="_blank" rel="noopener">
+            content += `<a class="att-file" href="${esc(url)}" target="_blank" rel="noopener">
               <div class="file-ic" style="background:${fileIcColor(ext)}">${ext}</div>
               <div class="file-info">
                 <div class="file-name">${esc(m.attachment_name || "Download")}</div>
-                <div class="file-sub">${isExternal ? "Open link" : "Download"}</div>
+                <div class="file-sub">${isExternal ? "Open link" : "Preview / Open"}</div>
               </div>
               <svg class="dl-ic" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
             </a>`;
-          } else {
-            content = esc(m.body);
+          }
+
+          let bodyText = m.body || "";
+          bodyText = bodyText.replace(/\[USER=\d+\](.*?)\[\/USER\]/g, "@$1");
+          if (bodyText.trim()) {
+            let bodyHtml = esc(bodyText);
+            bodyHtml = bodyHtml.replace(/\[URL=([^\]]+)\](.*?)\[\/URL\]/gi, (match, url, text) => {
+              return `<a href="${url}" target="_blank" rel="noopener" style="color:var(--primary);text-decoration:underline;">${text}</a>`;
+            });
+            bodyHtml = bodyHtml.replace(/\[URL\](.*?)\[\/URL\]/gi, (match, url) => {
+              return `<a href="${url}" target="_blank" rel="noopener" style="color:var(--primary);text-decoration:underline;">${url}</a>`;
+            });
+            const rawUrlRegex = /(?<!href=")(?<!src=")(?<!">)(https?:\/\/[^\s<]+)/gi;
+            bodyHtml = bodyHtml.replace(rawUrlRegex, (url) => {
+              return `<a href="${url}" target="_blank" rel="noopener" style="color:var(--primary);text-decoration:underline;">${url}</a>`;
+            });
+            bodyHtml = bodyHtml.replace(/\[B\](.*?)\[\/B\]/gi, '<strong>$1</strong>');
+            bodyHtml = bodyHtml.replace(/\[I\](.*?)\[\/I\]/gi, '<em>$1</em>');
+            bodyHtml = bodyHtml.replace(/\[U\](.*?)\[\/U\]/gi, '<u>$1</u>');
+            bodyHtml = bodyHtml.replace(/\[S\](.*?)\[\/S\]/gi, '<del>$1</del>');
+            content += `<div style="${hasAtt ? 'margin-top:8px;' : ''}">${bodyHtml}</div>`;
           }
 
           // WhatsApp-style deleted placeholder + edited tag + actions.
